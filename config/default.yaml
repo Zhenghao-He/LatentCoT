@@ -1,0 +1,35 @@
+dataset:
+  name: "gsm8k"  # Can be extended to other datasets
+  split: "test"
+  max_samples: 1000  # For quick testing, increase for full experiments
+  paths: "data/raw/grade-school-math/grade_school_math/data" # Path to GSM8K dataset
+
+model:
+  name: "meta-llama/Meta-Llama-3-8B-Instruct"  
+
+sae:
+  model_name: "EleutherAI/sae-llama-3-8b-32x"
+
+strategies:
+  direct:
+    max_new_tokens: 128
+    skip: true
+
+  cot:
+    max_new_tokens: 256
+    skip: true
+
+  hint:
+    max_new_tokens: 256
+    skip: false
+
+  cot_hint:
+    max_new_tokens: 256
+    skip: true
+
+
+
+
+experiment:
+  output_dir: "./results"
+  random_seed: 42

@@ -1,0 +1,27 @@
+# ---- Project-specific ignores ----
+data/
+results/
+
+# ---- Python caches ----
+__pycache__/
+*/__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# ---- Virtual environments ----
+venv/
+.venv/
+
+# ---- Jupyter Notebook checkpoints ----
+.ipynb_checkpoints/
+
+# ---- OS-specific files ----
+.DS_Store
+Thumbs.db
+
+# ---- VSCode ----
+.vscode/
+
+# ---- Python packaging ----
+*.egg-info/
