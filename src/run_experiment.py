@@ -6,6 +6,7 @@ from runner import ExperimentRunner
 from my_datasets.dataset_loader import DataLoader, GSM8KLoader
 import torch
 from utils.config import Config
+from analysis.LatentAnalyzer import LatentAnalyzer
 
 def main():
     """Main function for running experiments."""
@@ -28,6 +29,18 @@ def main():
         nargs='*',  # 允许0个或多个参数
         default=None,
         help='List of layers to hook for activation extraction (e.g., --hook_layers layers.24 layers.25)'
+    )
+    parser.add_argument(
+        '--topk',
+        type=int,
+        default=20,
+        help='Top K indices to consider for analysis'
+    )
+    parser.add_argument(
+        '--get_index_type',
+        type=str,
+        default='Reason',
+        help='Type of index to get (e.g., Reason or Hint)'
     )
 
     analysis_group = parser.add_mutually_exclusive_group(required=True)
@@ -63,29 +76,50 @@ def main():
         action='store_true',
         help='Flag to run the full experiment'
     )
+
     args = parser.parse_args()
     
     config = Config(args.config)
-    dt_name = config.get('dataset.name', '')
-    if dt_name == 'gsm8k':
-        dt_loader = GSM8KLoader(
-            base_path=config.get('dataset.paths', ''),
-            max_samples=config.get('dataset.max_samples', None)
-        )
-    else:
-        dt_loader = DataLoader(
-            base_path=config.get('dataset.paths', ''),
-            max_samples=config.get('dataset.max_samples', None)
-        )
-
-    runner = ExperimentRunner(args.config, args=args, data_loader=dt_loader)
-
+    
     if args.extract_latent_zs:
+        dt_name = config.get('dataset.name', '')
+        if dt_name == 'gsm8k':
+            dt_loader = GSM8KLoader(
+                base_path=config.get('dataset.paths', ''),
+                max_samples=config.get('dataset.max_samples', None)
+            )
+        else:
+            dt_loader = DataLoader(
+                base_path=config.get('dataset.paths', ''),
+                max_samples=config.get('dataset.max_samples', None)
+            )
+        runner = ExperimentRunner(args.config, args=args, data_loader=dt_loader)
         runner.extract_latent_zs()
         print("Latent extraction completed")
     elif args.run_analysis:
-        runner.run_analysis()
+        
+        analyzer = LatentAnalyzer(config, args)
+        analyzer.load_latents()
+        
+        # Example: compute direction between 'direct' and 'cot'
+        analyzer.compute_direction_by_difference(args.get_index_type)
         print("Latent analysis completed")
+
+    elif args.steering:
+        dt_name = config.get('dataset.name', '')
+        if dt_name == 'gsm8k':
+            dt_loader = GSM8KLoader(
+                base_path=config.get('dataset.paths', ''),
+                max_samples=config.get('dataset.max_samples', None)
+            )
+        else:
+            dt_loader = DataLoader(
+                base_path=config.get('dataset.paths', ''),
+                max_samples=config.get('dataset.max_samples', None)
+            )
+        runner = ExperimentRunner(args.config, args=args, data_loader=dt_loader)
+        runner.run_steering_experiment()
+        print("Steering experiment completed")
 
         
 

@@ -13,11 +13,11 @@ sae:
 strategies:
   direct:
     max_new_tokens: 128
-    skip: true
+    skip: false
 
   cot:
     max_new_tokens: 256
-    skip: true
+    skip: false
 
   hint:
     max_new_tokens: 256

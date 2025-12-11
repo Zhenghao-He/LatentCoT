@@ -81,6 +81,12 @@ class BaseStrategy(ABC):
         pass
     
     
+    @abstractmethod
+    def steer(self, question: str, hook_layers_idx, **kwargs):
+
+        pass
+
+
     def generate_response_hidden(
         self,
         prompt: str,
@@ -162,6 +168,7 @@ class BaseStrategy(ABC):
 
         return generated_text, hidden_states
        
+
 
     def _get_stopping_criteria(self, end_token_id: int, input_length: int) -> StoppingCriteriaList:
         """Create stopping criteria for <END> token.

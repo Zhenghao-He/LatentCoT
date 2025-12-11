@@ -62,6 +62,9 @@ class ChainOfThoughtStrategy(BaseStrategy):
             }
         )
     
+    def steer(self, question: str, hook_layers_idx, **kwargs):
+        pass
+    
     def _parse_steps(self, response: str) -> List[str]:
         """Parse reasoning steps from CoT response.
         

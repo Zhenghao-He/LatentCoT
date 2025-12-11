@@ -135,8 +135,9 @@ class ExperimentRunner:
         
         # Save questions and indices first
         self._save_questions(qa_pairs)
-        layer_latent_zs = {}
+        
         for strategy_name, strategy in self.strategies.items():
+            layer_latent_zs = {}
             if self.config.get(f'strategies.{strategy_name}.skip', False):
                 print(f"Skipping strategy: {strategy_name}")
                 continue
@@ -156,6 +157,7 @@ class ExperimentRunner:
                 
                 
                 latent_zs = self.get_latent_z(output.hidden_states)
+                # import pdb; pdb.set_trace()
                 for layer, z in zip(self.args.hook_layers, latent_zs):
                     layer_latent_zs.setdefault(layer, []).append(z)
 
@@ -190,6 +192,27 @@ class ExperimentRunner:
 
         return results
     
+    def run_steering_experiment(
+        self
+    ) -> None:
+        """Run steering experiment for a given strategy.
+        
+        Args:
+            strategy_name: Name of the strategy to run steering on
+        """
+        if strategy_name not in self.strategies:
+            print(f"Strategy '{strategy_name}' not found.")
+            return
+        
+        strategy = self.strategies[strategy_name]
+        
+        qa_pairs = self.data_loader.load_data(split=self.config.get('dataset.split', 'train'))
+        print(f"Starting steering experiment with {len(qa_pairs)} question-answer pairs using strategy '{strategy_name}'")
+        
+        for i, qa_pair in enumerate(tqdm(qa_pairs, desc=f"Steering-{strategy_name}")):
+            question = qa_pair['question']
+            ground_truth = qa_pair['answer']
+
     def get_latent_z(self, hidden_states: torch.Tensor) -> torch.Tensor:
         """Get latent representations from SAE models."""
 
@@ -213,7 +236,7 @@ class ExperimentRunner:
                 z=latent_z[2]
                 z=z[self.args.token_pos]
             # import pdb; pdb.set_trace()
-            result_zs.append(z.cpu())
+            result_zs.append(z.detach().cpu())
             # 清理GPU内存：移除中间变量和tensor
             sae = sae.cpu()  # 将SAE移回CPU释放GPU内存
             del hidden_state, z, latent_z
@@ -297,17 +320,7 @@ class ExperimentRunner:
         else:
             return obj
 
-    def run_analysis(self):
-        """Run latent representation analysis."""
+
         
-        analyzer = LatentAnalyzer(self.config, self.args)
-        analyzer.load_latents()
+
         
-        # Example: compute direction between 'direct' and 'cot'
-        strategy_a = 'direct'
-        strategy_b = 'cot'
-        direction = analyzer.compute_direction(strategy_a, strategy_b)
-        if direction is not None:
-            print(f"Computed direction from {strategy_a} to {strategy_b}: shape {direction.shape}")
-        else:
-            print(f"Could not compute direction between {strategy_a} and {strategy_b}")
