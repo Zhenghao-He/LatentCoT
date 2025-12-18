@@ -62,8 +62,36 @@ class ChainOfThoughtStrategy(BaseStrategy):
             }
         )
     
-    def steer(self, question: str, hook_layers_idx, **kwargs):
-        pass
+    def steer(self, question, hook_layers_idx, saes, alpha, steer_n_steps=1, **kwargs):
+        prompt = self.generate_prompt(question)
+        
+        # Get prompt hidden states (what we actually want for analysis)
+        # prompt_hidden_states = self.get_prompt_hidden_states(prompt)
+        
+        # Generate response (we still need the response but not its hidden states)
+        # 
+        response = self.generate_steered_response(
+            prompt=prompt,
+            hook_layers_idx=hook_layers_idx,
+            max_new_tokens=self.config.get('max_new_tokens'),
+            saes=saes,
+            alpha=alpha,
+            n_steps = steer_n_steps,
+            **kwargs
+        )
+
+        # Parse response - remove <END> and everything after it
+        # steps = self._parse_steps(response)
+        
+        return StrategyOutput(
+            response=response,
+            metadata={
+                'strategy': 'direct',
+                'prompt': prompt,
+                'answer': response
+            }
+        )
+
     
     def _parse_steps(self, response: str) -> List[str]:
         """Parse reasoning steps from CoT response.

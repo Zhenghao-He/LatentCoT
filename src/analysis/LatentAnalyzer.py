@@ -16,7 +16,7 @@ class LatentAnalyzer:
         self.config = config
         self.args = args
         self.latents: Dict[str, Dict[str, Any]] = {}
-        self.output_dir = Path(self.config.get('experiment.output_dir', './results'))
+        self.output_dir = Path(self.config.get('experiment.output_dir', './results') + "/" + self.config.get('model.name'))
         self.output_dir.mkdir(parents=True, exist_ok=True)
 
     def load_latents(self):
@@ -84,17 +84,18 @@ class LatentAnalyzer:
             
             idx = np.argsort(avg_direction)[::-1][:self.args.topk]
             
+            top_values = avg_direction[idx]
 
-            directions[layer] = idx
-            layer_dir = self.output_dir / "index" / self.config.get('dataset.name') / layer
+            directions[layer] = (top_values, idx)
+            layer_dir = self.output_dir / "features" / self.config.get('dataset.name') / layer
             layer_dir.mkdir(parents=True, exist_ok=True)
             if self.args.type_of_analysis:
-                filename = f"{type}_Index_{self.args.type_of_analysis}_TopK{self.args.topk}.npy"
+                filename = f"{type}_Features_{self.args.type_of_analysis}_TopK{self.args.topk}.npy"
             else:
-                filename = f"{type}_Index_tokenpos{self.args.token_pos}_TopK{self.args.topk}.npy"
+                filename = f"{type}_Features_tokenpos{self.args.token_pos}_TopK{self.args.topk}.npy"
             filepath = layer_dir / filename
-            np.save(filepath, idx)
-            print(f"index for {layer} saved to {filepath}")
+            np.save(filepath, (top_values, idx))
+            print(f"acts and index for {layer} saved to {filepath}")
         
             # import pdb; pdb.set_trace() 
 

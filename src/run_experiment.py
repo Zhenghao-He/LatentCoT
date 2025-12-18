@@ -3,7 +3,7 @@
 import argparse
 
 from runner import ExperimentRunner
-from my_datasets.dataset_loader import DataLoader, GSM8KLoader
+from my_datasets.dataset_loader import DataLoader, GSM8KLoader, GPQALoader
 import torch
 from utils.config import Config
 from analysis.LatentAnalyzer import LatentAnalyzer
@@ -31,6 +31,13 @@ def main():
         help='List of layers to hook for activation extraction (e.g., --hook_layers layers.24 layers.25)'
     )
     parser.add_argument(
+        '--steer_layers',
+        type=str,
+        nargs='*',  # 允许0个或多个参数
+        default=None,
+        help='List of layers to hook for activation extraction (e.g., --steer_layers layers.24 layers.25)'
+    )
+    parser.add_argument(
         '--topk',
         type=int,
         default=20,
@@ -41,6 +48,24 @@ def main():
         type=str,
         default='Reason',
         help='Type of index to get (e.g., Reason or Hint)'
+    )
+    parser.add_argument(
+        '--steering_target_strategy',
+        type=str,
+        choices=['direct', 'cot', 'hint', 'cot_hint'],
+        help='Target strategy for steering experiment'
+    )
+    parser.add_argument(
+        '--steer_alpha',
+        type=float,
+        default=1.0,
+        help='Steering strength alpha value'
+    )
+    parser.add_argument(
+        '--steer_n_steps',
+        type=int,
+        default=1,
+        help='Number of steps to apply steering'
     )
 
     analysis_group = parser.add_mutually_exclusive_group(required=True)
@@ -88,6 +113,12 @@ def main():
                 base_path=config.get('dataset.paths', ''),
                 max_samples=config.get('dataset.max_samples', None)
             )
+        elif dt_name == 'gpqa':
+            dt_loader = GPQALoader(
+                base_path=config.get('dataset.paths', ''),
+                data_subset=config.get('dataset.data_subset', 'gpqa_diamond'),
+                max_samples=config.get('dataset.max_samples', None)
+            )
         else:
             dt_loader = DataLoader(
                 base_path=config.get('dataset.paths', ''),
@@ -110,6 +141,12 @@ def main():
         if dt_name == 'gsm8k':
             dt_loader = GSM8KLoader(
                 base_path=config.get('dataset.paths', ''),
+                max_samples=config.get('dataset.max_samples', None)
+            )
+        elif dt_name == 'gpqa':
+            dt_loader = GPQALoader(
+                base_path=config.get('dataset.paths', ''),
+                data_subset=config.get('dataset.data_subset', 'gpqa_diamond'),
                 max_samples=config.get('dataset.max_samples', None)
             )
         else:

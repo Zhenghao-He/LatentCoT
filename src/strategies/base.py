@@ -82,10 +82,144 @@ class BaseStrategy(ABC):
     
     
     @abstractmethod
-    def steer(self, question: str, hook_layers_idx, **kwargs):
+    def steer(self, question: str, hook_layers_idx, saes, alpha, **kwargs) -> StrategyOutput:
 
         pass
 
+    def generate_steered_response(
+        self,
+        prompt: str,
+        hook_layers_idx: Dict[str, torch.Tensor],  # {layer_name: feature_indices}
+        max_new_tokens: Optional[int] = None,
+        saes: Dict[str, Any] = None,  # {layer_name: sae_model}
+        alpha: float = 1.0,  # steering strength
+        n_steps: int =1,
+        **generation_kwargs
+    ) -> str:
+        """Generate response with SAE steering on specified layers.
+        
+        Args:
+            prompt: Input prompt
+            hook_layers_idx: Dict mapping layer names to feature indices to steer
+            max_new_tokens: Maximum number of new tokens to generate
+            saes: Dict mapping layer names to SAE models
+            alpha: Steering strength multiplier
+            **generation_kwargs: Additional generation arguments
+            
+        Returns:
+            Generated text string
+        """
+        inputs = self.tokenizer(prompt, return_tensors="pt", return_attention_mask=True).to(self.device)
+        
+        # get <END> token id
+        end_token_id = self.tokenizer.convert_tokens_to_ids("<END>")
+
+        # Set default generation parameters
+        gen_kwargs = {
+            'do_sample': False,
+            'pad_token_id': self.tokenizer.pad_token_id or self.tokenizer.eos_token_id,
+            'stopping_criteria': self._get_stopping_criteria(end_token_id, len(inputs.input_ids[0])),
+            'output_hidden_states': True,
+            'return_dict_in_generate': True,
+            'max_new_tokens': max_new_tokens,
+            **generation_kwargs
+        }
+        
+        handles = []
+        
+        # Register forward hooks for steering
+        for layer_name, feature in hook_layers_idx.items():
+            sae = saes.get(layer_name)
+            if sae is None:
+                print(f"Warning: No SAE found for layer {layer_name}, skipping")
+                continue
+            
+            feature_acts, feature_idx = feature  
+            feature_acts = torch.tensor(feature_acts, device=self.device, dtype=torch.float16)
+            # feature_idx = torch.tensor(feature_idx, device=self.device, dtype=torch.float16)
+            # Get the module to hook
+            # import pdb; pdb.set_trace()
+            module = self.model.base_model.get_submodule(layer_name)
+            
+            def make_steering_hook(sae_model, feature_acts, feature_idx, strength, n_steps=1):
+                remaining = n_steps
+                def hook_fn(module, inputs, outputs):
+                    nonlocal remaining
+                    if remaining <= 0:
+                        return outputs
+                    
+                    hidden = outputs[0]  # [seq, hidden_dim] 取第一个batch
+                    # import pdb; pdb.set_trace()
+                    # Only steer the last token position
+                    last_hidden = hidden[-1:, :]  # [1, hidden_dim]
+                    
+                    # Move SAE to same device and dtype
+                    sae = sae_model.to(last_hidden.device)
+                    sae_dtype = next(sae.parameters()).dtype
+                    last_hidden_typed = last_hidden.to(sae_dtype)
+                    # import pdb; pdb.set_trace()
+                    # Encode to latent space
+                    latent_tuple = sae.encode(last_hidden_typed)  # [batch, latent_dim]
+                    if sae.__class__.__name__ == "SparseAutoEncoder":
+                        latent_z = latent_tuple[0]
+                        pre_acts = latent_tuple[1]
+                        steered_pre_acts = pre_acts.clone()
+                        steered_pre_acts[:, feature_idx] += strength * feature_acts
+                        steered_pre_acts = torch.nn.functional.relu(steered_pre_acts)
+
+                        base_line = sae.decode(latent_z)
+                        hidden_steered = sae.decode(steered_pre_acts)
+                    else:
+
+                        top_acts = latent_tuple[0]      # Top-k activation values
+                        top_indices = latent_tuple[1]   # Top-k feature indices
+                        pre_acts = latent_tuple[2]  # Pre-activation values (if applicable) 
+                        steered_pre_acts = pre_acts.clone()
+                        steered_pre_acts[:, feature_idx] += strength * feature_acts
+                        top_acts_steered, top_indices_steered = torch.topk(steered_pre_acts, k=top_acts.size(1), sorted=False)
+                    
+                    # Decode back to hidden space
+                        hidden_steered = sae.decode(top_acts_steered, top_indices_steered)  # [batch, hidden_dim]
+                        base_line = sae.decode(top_acts, top_indices)
+                    increment = hidden_steered - base_line
+                    hidden_steered = last_hidden_typed + increment
+                    # import pdb; pdb.set_trace()
+                    # Replace the last token's hidden state
+                    hidden[-1, :] = hidden_steered.to(hidden.dtype)
+                    outputs = hidden.unsqueeze(dim=0)  # Return as tuple
+                    # Return modified output tuple
+                    remaining -= 1
+                    return outputs
+                
+                return hook_fn
+            
+            h = module.register_forward_hook(make_steering_hook(sae, feature_acts, feature_idx, alpha, n_steps=n_steps))
+            handles.append(h)
+        
+        # Generate with steering
+        with torch.no_grad():
+            outputs = self.model.generate(
+                inputs.input_ids,
+                attention_mask=inputs.attention_mask,
+                **gen_kwargs
+            )
+        
+        # Remove all hooks
+        for h in handles:
+            h.remove()
+        
+        # Decode generated text
+        generated_ids = outputs.sequences[0][len(inputs.input_ids[0]):]
+        generated_text = self.tokenizer.decode(generated_ids, skip_special_tokens=False)
+        
+        # Cleanup
+        del outputs
+        del inputs
+        del generated_ids
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+        
+        return generated_text 
 
     def generate_response_hidden(
         self,

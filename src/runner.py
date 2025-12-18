@@ -19,6 +19,9 @@ from strategies.cot import ChainOfThoughtStrategy
 from strategies.hint import HintStrategy
 from sparsify import Sae
 from analysis.LatentAnalyzer import LatentAnalyzer
+import numpy as np
+from analysis.SparseAutoEncoder import load_sae, SparseAutoEncoder
+from huggingface_hub import hf_hub_download
 
 class ExperimentRunner:
     """Simplified runner for strategy comparison experiments."""
@@ -49,7 +52,7 @@ class ExperimentRunner:
         self._initialize_strategies()
         
         # Setup output directory
-        self.output_dir = Path(self.config.get('experiment.output_dir', './results'))
+        self.output_dir = Path(self.config.get('experiment.output_dir', './results') + "/" + self.config.get('model.name'))
         self.output_dir.mkdir(parents=True, exist_ok=True)
         
     
@@ -85,14 +88,30 @@ class ExperimentRunner:
         # Initialize as dictionary, not list
         self.saes = {}
         sae_model_name = self.config.get('sae.model_name', '')
-        
-        for hook_layer in self.args.hook_layers:
+        hook_layers = self.args.hook_layers if self.args.hook_layers else self.args.steer_layers
+        for hook_layer in hook_layers:
             print(f"Loading SAE for {hook_layer}...")
-            
-            sae = Sae.load_from_hub(sae_model_name, hookpoint=hook_layer)
-            
+            if sae_model_name.startswith("EleutherAI/"):
+                # Load from Hugging Face Hub
+                sae = Sae.load_from_hub(sae_model_name, hookpoint=hook_layer)
+                
+            elif sae_model_name.startswith("Goodfire/"):
+                file_path = hf_hub_download(
+                    repo_id=sae_model_name,
+                    filename=f"{sae_model_name.split('/')[-1]}.pth",
+                    repo_type="model"
+                )
+
+                sae = load_sae(
+                    file_path,
+                    d_model=self.model.config.hidden_size,
+                    expansion_factor=self.config.get('sae.expansion_factor', 32),
+                    device=self.device,
+                )
+            else:
+                raise ValueError(f"Unsupported SAE model name: {sae_model_name}")
             self.saes[hook_layer] = sae
-            print(f"SAE for layer {hook_layer} loaded - input_dim={sae.d_in}, num_latents={sae.num_latents}")
+            print(f"SAE for layer {hook_layer} loaded.")
         
         print(f"Successfully loaded {len(self.saes)} SAE models")
     
@@ -162,11 +181,13 @@ class ExperimentRunner:
                     layer_latent_zs.setdefault(layer, []).append(z)
 
                 predicted_answer = output.metadata.get('answer', '')
-                
+                response = output.response
+                predicted_answer = self.data_loader.extract_answer(predicted_answer)
                 result = {
                     'question_idx': i,
                     'question': question,
-                    'predicted_answer': self.data_loader.extract_answer(predicted_answer),
+                    'response': response,
+                    'predicted_answer': predicted_answer,
                     'ground_truth': ground_truth,
                     'correct': self.data_loader.check_answer_correctness(predicted_answer, ground_truth)
                 }
@@ -192,6 +213,20 @@ class ExperimentRunner:
 
         return results
     
+    def load_features(self):
+        self.features={}
+        type = self.args.get_index_type
+        for layer in self.args.steer_layers:
+            layer_dir = self.output_dir / "features" / self.config.get('dataset.name') / layer
+            layer_dir.mkdir(parents=True, exist_ok=True)
+            if self.args.type_of_analysis:
+                filename = f"{type}_Features_{self.args.type_of_analysis}_TopK{self.args.topk}.npy"
+            else:
+                filename = f"{type}_Features_tokenpos{self.args.token_pos}_TopK{self.args.topk}.npy"
+            filepath = layer_dir / filename
+            features = np.load(filepath, allow_pickle=True)
+            self.features[layer] = features
+            print(f"features for {layer} loaded from {filepath}")
     def run_steering_experiment(
         self
     ) -> None:
@@ -200,18 +235,41 @@ class ExperimentRunner:
         Args:
             strategy_name: Name of the strategy to run steering on
         """
-        if strategy_name not in self.strategies:
-            print(f"Strategy '{strategy_name}' not found.")
+        target_strategy = self.args.steering_target_strategy
+        if target_strategy not in self.strategies:
+            print(f"Strategy '{target_strategy}' not found.")
             return
         
-        strategy = self.strategies[strategy_name]
+        strategy = self.strategies[target_strategy]
+        self.load_features()
+        if not self.features:
+            raise ValueError("No features loaded, cannot proceed with steering.")
+            
         
         qa_pairs = self.data_loader.load_data(split=self.config.get('dataset.split', 'train'))
-        print(f"Starting steering experiment with {len(qa_pairs)} question-answer pairs using strategy '{strategy_name}'")
-        
-        for i, qa_pair in enumerate(tqdm(qa_pairs, desc=f"Steering-{strategy_name}")):
+        print(f"Starting steering experiment with {len(qa_pairs)} question-answer pairs using strategy '{target_strategy}'")
+        results = []
+        for i, qa_pair in enumerate(tqdm(qa_pairs, desc=f"Steering-{target_strategy}")):
             question = qa_pair['question']
             ground_truth = qa_pair['answer']
+            output = strategy.steer(question, self.features, self.saes, self.args.steer_alpha, self.args.steer_n_steps)
+                
+            predicted_answer = output.metadata.get('answer', '')
+            response = output.response
+            predicted_answer = self.data_loader.extract_answer(predicted_answer)
+            result = {
+                'question_idx': i,
+                'question': question,
+                'response': response,
+                'predicted_answer': predicted_answer,
+                'ground_truth': ground_truth,
+                'correct': self.data_loader.check_answer_correctness(predicted_answer, ground_truth)
+            }
+            
+            results.append(result)
+                
+            
+        self._save_strategy_answers(results, target_strategy+"_steered_"+self.args.get_index_type)
 
     def get_latent_z(self, hidden_states: torch.Tensor) -> torch.Tensor:
         """Get latent representations from SAE models."""
@@ -226,14 +284,15 @@ class ExperimentRunner:
             hidden_state = hidden_state.to(sae_dtype)
             # import pdb; pdb.set_trace()
             latent_z = sae.encode(hidden_state)
+            if sae.__class__.__name__ == "SparseAutoEncoder":
+                z = latent_z[0]
+            else:   
+                z = latent_z[2]  # Top-k activations
             if self.args.type_of_analysis == 'avg_pooling':
-                z=latent_z[2]
                 z = torch.mean(z, dim=0)
             elif self.args.type_of_analysis == 'max_pooling':
-                z=latent_z[2]
                 z, _ = torch.max(z, dim=0)
             else:
-                z=latent_z[2]
                 z=z[self.args.token_pos]
             # import pdb; pdb.set_trace()
             result_zs.append(z.detach().cpu())
@@ -293,8 +352,13 @@ class ExperimentRunner:
             'total_count': len(strategy_results),
             'results': strategy_results
         }
-        
-        filepath = self.output_dir / "answers" / f"{strategy_name}_answers_{self.config.get('dataset.name')}_{self.config.get('dataset.max_samples')}.json"
+        if strategy_name.endswith("_steered_"+self.args.get_index_type):
+            if self.args.type_of_analysis:
+                filepath = self.output_dir / "answers" / self.config.get('dataset.name') / f"{strategy_name}_{self.args.type_of_analysis}_nsteps{self.args.steer_n_steps}_alpha{self.args.steer_alpha}_TopK{self.args.topk}_{self.config.get('dataset.max_samples')}.json"
+            else:
+                filepath = self.output_dir / "answers" / self.config.get('dataset.name') / f"{strategy_name}_tokenpos{self.args.token_pos}_nsteps{self.args.steer_n_steps}_alpha{self.args.steer_alpha}_TopK{self.args.topk}_{self.config.get('dataset.max_samples')}.json"
+        else:
+            filepath = self.output_dir / "answers" / self.config.get('dataset.name') / f"{strategy_name}_{self.config.get('dataset.max_samples')}.json"
         os.makedirs(filepath.parent, exist_ok=True)
         with open(filepath, 'w') as f:
             json.dump(answers_data, f, indent=2)
