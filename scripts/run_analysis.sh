@@ -4,8 +4,8 @@
 python src/run_experiment.py \
         --run_analysis \
         --config config/default.yaml \
-        --hook_layers layers.1 layers.5 layers.15 layers.19 layers.21 layers.24 layers.29 \
-        --topk 100 \
+        --hook_layers layers.50 \
+        --topk 25 \
         --device cuda:0 \
         --get_index_type Reason \
-        --token_pos 2
+        --token_pos 1

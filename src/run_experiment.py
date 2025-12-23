@@ -31,6 +31,12 @@ def main():
         help='List of layers to hook for activation extraction (e.g., --hook_layers layers.24 layers.25)'
     )
     parser.add_argument(
+        '--k_index',
+        type=int,
+        default=None,
+        help='index K for top-K latent representation extraction'
+    )
+    parser.add_argument(
         '--steer_layers',
         type=str,
         nargs='*',  # 允许0个或多个参数

@@ -57,18 +57,54 @@ class GSM8KLoader(DataLoader):
         answer = data.get('answer', '')
         return question.strip(), answer.strip()
 
+    # def check_answer_correctness(self, predicted: str, ground_truth: str) -> bool:
+    #     if not predicted or not ground_truth:
+    #         return False
+    #     pred_clean = predicted.strip().lower()
+    #     truth_clean = ground_truth.strip().lower()
+    #     if pred_clean == truth_clean:
+    #         return True
+    #     import re
+    #     pred_numbers = re.findall(r'\b\d+(?:\.\d+)?\b', pred_clean)
+    #     truth_numbers = re.findall(r'\b\d+(?:\.\d+)?\b', truth_clean)
+    #     if pred_numbers and truth_numbers:
+    #         return pred_numbers[-1] == truth_numbers[-1]
+    #     return False
     def check_answer_correctness(self, predicted: str, ground_truth: str) -> bool:
         if not predicted or not ground_truth:
             return False
+        
+        # 1. 基础清理
         pred_clean = predicted.strip().lower()
         truth_clean = ground_truth.strip().lower()
+        
+        # 2. 如果完全一致直接返回
         if pred_clean == truth_clean:
             return True
+        
         import re
-        pred_numbers = re.findall(r'\b\d+(?:\.\d+)?\b', pred_clean)
-        truth_numbers = re.findall(r'\b\d+(?:\.\d+)?\b', truth_clean)
-        if pred_numbers and truth_numbers:
-            return pred_numbers[-1] == truth_numbers[-1]
+
+        def extract_last_num(text):
+            # 移除逗号，处理 "70,000" -> "70000"
+            text = text.replace(',', '')
+            # 寻找数字（包括正负号和小数点）
+            nums = re.findall(r'-?\d+\.?\d*', text)
+            if nums:
+                try:
+                    # 转化为 float 以处理 "70000" == "70000.0" 的情况
+                    return float(nums[-1])
+                except ValueError:
+                    return None
+            return None
+
+        pred_val = extract_last_num(pred_clean)
+        truth_val = extract_last_num(truth_clean)
+
+        # 3. 数值比较
+        if pred_val is not None and truth_val is not None:
+            # 使用 round 或 math.isclose 处理浮点数微小误差（可选）
+            return pred_val == truth_val
+
         return False
     
 

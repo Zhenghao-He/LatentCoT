@@ -1,12 +1,12 @@
 python src/run_experiment.py \
         --steering \
-        --config config/large.yaml \
-        --steer_layers layers.50\
+        --config config/default.yaml \
+        --steer_layers layers.19\
         --topk 10 \
-        --k_index 0 \
+        --k_index 3 \
         --device cuda:3 \
         --get_index_type Reason \
-        --steering_target_strategy cot \
+        --steering_target_strategy direct \
         --token_pos 1 \
         --steer_n_steps 1 \
         --steer_alpha 100.0

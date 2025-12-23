@@ -60,7 +60,7 @@ class ExperimentRunner:
         """Load model and tokenizer."""
         transformers.logging.set_verbosity_error()
         model_name = self.config.get('model.name', 'gpt2-medium')
-
+        # max_memory = {0: "0GiB", 1: "0GiB", 2: "0GiB", 3: "20GiB", 4: "20GiB", 5: "20GiB", 6: "20GiB", 7: "20GiB"}
         print(f"Loading model: {model_name}")
         self.tokenizer = AutoTokenizer.from_pretrained(
             model_name,
@@ -74,9 +74,11 @@ class ExperimentRunner:
         self.model = AutoModelForCausalLM.from_pretrained(
             model_name,
             output_hidden_states=True,
-            torch_dtype=torch.float32,
+            torch_dtype=torch.float16,
+            device_map="auto",
+            # max_memory=max_memory,
             # local_files_only=True
-        ).to(self.device)
+        )
         
         self.model.eval()
 
@@ -98,14 +100,14 @@ class ExperimentRunner:
             elif sae_model_name.startswith("Goodfire/"):
                 file_path = hf_hub_download(
                     repo_id=sae_model_name,
-                    filename=f"{sae_model_name.split('/')[-1]}.pth",
+                    filename=f"{sae_model_name.split('/')[-1]}.pth" if sae_model_name=="Goodfire/Llama-3.1-8B-Instruct-SAE-l19" else f"{sae_model_name.split('/')[-1]}.pt",
                     repo_type="model"
                 )
 
                 sae = load_sae(
                     file_path,
                     d_model=self.model.config.hidden_size,
-                    expansion_factor=self.config.get('sae.expansion_factor', 32),
+                    expansion_factor= 16 if sae_model_name=="Goodfire/Llama-3.1-8B-Instruct-SAE-l19" else 8,
                     device=self.device,
                 )
             else:
@@ -182,11 +184,13 @@ class ExperimentRunner:
 
                 predicted_answer = output.metadata.get('answer', '')
                 response = output.response
+                num_generated_tokens = output.num_generated_tokens
                 predicted_answer = self.data_loader.extract_answer(predicted_answer)
                 result = {
                     'question_idx': i,
                     'question': question,
                     'response': response,
+                    'num_generated_tokens': num_generated_tokens,
                     'predicted_answer': predicted_answer,
                     'ground_truth': ground_truth,
                     'correct': self.data_loader.check_answer_correctness(predicted_answer, ground_truth)
@@ -227,6 +231,8 @@ class ExperimentRunner:
             features = np.load(filepath, allow_pickle=True)
             self.features[layer] = features
             print(f"features for {layer} loaded from {filepath}")
+
+
     def run_steering_experiment(
         self
     ) -> None:
@@ -252,15 +258,17 @@ class ExperimentRunner:
         for i, qa_pair in enumerate(tqdm(qa_pairs, desc=f"Steering-{target_strategy}")):
             question = qa_pair['question']
             ground_truth = qa_pair['answer']
-            output = strategy.steer(question, self.features, self.saes, self.args.steer_alpha, self.args.steer_n_steps)
+            output = strategy.steer(question = question, hook_layers_idx=self.features, k_index=self.args.k_index, saes=self.saes, alpha=self.args.steer_alpha, steer_n_steps=self.args.steer_n_steps)
                 
             predicted_answer = output.metadata.get('answer', '')
             response = output.response
+            num_generated_tokens = output.num_generated_tokens
             predicted_answer = self.data_loader.extract_answer(predicted_answer)
             result = {
                 'question_idx': i,
                 'question': question,
                 'response': response,
+                'num_generated_tokens': num_generated_tokens,
                 'predicted_answer': predicted_answer,
                 'ground_truth': ground_truth,
                 'correct': self.data_loader.check_answer_correctness(predicted_answer, ground_truth)
@@ -278,8 +286,13 @@ class ExperimentRunner:
         for sae, hidden_state in zip(self.saes.items(), hidden_states):
             hookpoint, sae = sae
             # print(f"Processing hidden state from {hookpoint} with SAE...")
-            hidden_state = hidden_state.to(self.device)
-            sae = sae.to(self.device)
+            if hasattr(self.model, "hf_device_map"):
+                # 找到该层对应的设备，例如 "cuda:1"
+                target_device = self.model.hf_device_map.get(hookpoint, self.device)
+            else:
+                target_device = self.device
+            hidden_state = hidden_state.to(target_device)
+            sae = sae.to(target_device)
             sae_dtype = next(sae.parameters()).dtype  # SAE 当前用的 dtype
             hidden_state = hidden_state.to(sae_dtype)
             # import pdb; pdb.set_trace()
@@ -344,19 +357,35 @@ class ExperimentRunner:
         # Calculate accuracy
         correct_count = sum(1 for r in strategy_results if r.get('correct', False))
         accuracy = correct_count / len(strategy_results) if strategy_results else 0.0
-        
+
+        # Calculate mean num_generated_tokens
+        num_tokens_list = [r.get('num_generated_tokens', 0) for r in strategy_results if 'num_generated_tokens' in r]
+        mean_num_generated_tokens = float(np.mean(num_tokens_list)) if num_tokens_list else 0.0
+        std_num_generated_tokens = float(np.std(num_tokens_list)) if num_tokens_list else 0.0
+
         answers_data = {
             'strategy': strategy_name,
             'accuracy': accuracy,
             'correct_count': correct_count,
             'total_count': len(strategy_results),
+            'mean_num_generated_tokens': mean_num_generated_tokens,
+            'std_num_generated_tokens': std_num_generated_tokens,
             'results': strategy_results
         }
         if strategy_name.endswith("_steered_"+self.args.get_index_type):
-            if self.args.type_of_analysis:
-                filepath = self.output_dir / "answers" / self.config.get('dataset.name') / f"{strategy_name}_{self.args.type_of_analysis}_nsteps{self.args.steer_n_steps}_alpha{self.args.steer_alpha}_TopK{self.args.topk}_{self.config.get('dataset.max_samples')}.json"
+            if self.args.k_index is None:
+                if self.args.type_of_analysis:
+                    filepath = self.output_dir / "answers" / self.config.get('dataset.name') / self.args.steer_layers[0] / f"{strategy_name}_{self.args.type_of_analysis}_nsteps{self.args.steer_n_steps}_alpha{self.args.steer_alpha}_TopK{self.args.topk}_{self.config.get('dataset.max_samples')}.json"
+                else:
+                    filepath = self.output_dir / "answers" / self.config.get('dataset.name') / self.args.steer_layers[0] / f"{strategy_name}_tokenpos{self.args.token_pos}_nsteps{self.args.steer_n_steps}_alpha{self.args.steer_alpha}_TopK{self.args.topk}_{self.config.get('dataset.max_samples')}.json"
             else:
-                filepath = self.output_dir / "answers" / self.config.get('dataset.name') / f"{strategy_name}_tokenpos{self.args.token_pos}_nsteps{self.args.steer_n_steps}_alpha{self.args.steer_alpha}_TopK{self.args.topk}_{self.config.get('dataset.max_samples')}.json"
+                first_layer = self.args.steer_layers[0]
+                _, feaature_idx = self.features[first_layer]
+                index = feaature_idx[self.args.k_index]
+                if self.args.type_of_analysis:
+                    filepath = self.output_dir / "answers" / self.config.get('dataset.name') / self.args.steer_layers[0] / f"{strategy_name}_{self.args.type_of_analysis}_nsteps{self.args.steer_n_steps}_alpha{self.args.steer_alpha}_featureidx{index}_{self.config.get('dataset.max_samples')}.json"
+                else:
+                    filepath = self.output_dir / "answers" / self.config.get('dataset.name') / self.args.steer_layers[0] / f"{strategy_name}_tokenpos{self.args.token_pos}_nsteps{self.args.steer_n_steps}_alpha{self.args.steer_alpha}_featureidx{index}_{self.config.get('dataset.max_samples')}.json"
         else:
             filepath = self.output_dir / "answers" / self.config.get('dataset.name') / f"{strategy_name}_{self.config.get('dataset.max_samples')}.json"
         os.makedirs(filepath.parent, exist_ok=True)

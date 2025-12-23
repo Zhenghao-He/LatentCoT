@@ -17,14 +17,27 @@ class ChainOfThoughtStrategy(BaseStrategy):
         Returns:
             Formatted prompt for step-by-step reasoning
         """
-        prompt_template = self.config.get('prompt_template',
+        # prompt_template = self.config.get('prompt_template',
+        #     "Question: {question}\n\n"
+        #     "Let's think step by step. And execute it at the same time.\n"
+        #     "Format:"
+        #     "Step 1. ..."
+        #     "Step 2. ..."
+        #     "..."
+        #     "Step n. ...\n<|eot_id|>"
+        # )
+        prompt_template = self.config.get('strategies.cot.prompt_template',
+            "<|begin_of_text|><|start_header_id|>system<|end_header_id|>\n\n"
+            "You are a logical reasoning assistant. Solve the user's question by breaking it down into logical steps. "
+            "Finally, provide the answer in the specified format.<|eot_id|>"
+            "<|start_header_id|>user<|end_header_id|>\n\n"
             "Question: {question}\n\n"
-            "Let's think step by step. And execute it at the same time.\n"
-            "Format:"
-            "Step 1. ..."
-            "Step 2. ..."
-            "..."
-            "Step n. ... <END>"
+            "Let's think step by step:\n"
+            "1) Analyze the given information.\n"
+            "2) Deduce intermediate conclusions.\n"
+            "3) Finalize the answer.\n\n"
+            "Format your final response as: 'Therefore, the answer is [your answer].'<|eot_id|>"
+            "<|start_header_id|>assistant<|end_header_id|>\n\n"
         )
         return prompt_template.format(question=question)
     
@@ -41,7 +54,7 @@ class ChainOfThoughtStrategy(BaseStrategy):
         prompt = self.generate_prompt(question)
         
 
-        response, hidden_states = self.generate_response_hidden(
+        response, hidden_states, num_generated_tokens = self.generate_response_hidden(
             prompt=prompt,
             hook_layers=hook_layers,
             max_new_tokens=self.config.get('max_new_tokens'),
@@ -54,6 +67,7 @@ class ChainOfThoughtStrategy(BaseStrategy):
         return StrategyOutput(
             response=response,
             hidden_states=hidden_states,
+            num_generated_tokens=num_generated_tokens,
             steps=steps,
             metadata={
                 'strategy': 'cot',
@@ -62,7 +76,7 @@ class ChainOfThoughtStrategy(BaseStrategy):
             }
         )
     
-    def steer(self, question, hook_layers_idx, saes, alpha, steer_n_steps=1, **kwargs):
+    def steer(self, question, hook_layers_idx, k_index, saes, alpha, steer_n_steps=1, **kwargs):
         prompt = self.generate_prompt(question)
         
         # Get prompt hidden states (what we actually want for analysis)
@@ -70,9 +84,10 @@ class ChainOfThoughtStrategy(BaseStrategy):
         
         # Generate response (we still need the response but not its hidden states)
         # 
-        response = self.generate_steered_response(
+        response, num_generated_tokens = self.generate_steered_response(
             prompt=prompt,
             hook_layers_idx=hook_layers_idx,
+            k_index=k_index,
             max_new_tokens=self.config.get('max_new_tokens'),
             saes=saes,
             alpha=alpha,
@@ -85,6 +100,7 @@ class ChainOfThoughtStrategy(BaseStrategy):
         
         return StrategyOutput(
             response=response,
+            num_generated_tokens=num_generated_tokens,
             metadata={
                 'strategy': 'direct',
                 'prompt': prompt,
