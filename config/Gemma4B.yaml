@@ -1,0 +1,57 @@
+dataset:
+  # name: "mmlu"
+  # split: "test"
+  # max_samples: 57  # For quick testing, increase for full experiments
+  # data_subset: "all"  # Options: gpqa_diamond, gpqa_experts, gpqa_extended
+  # name: "gpqa"
+  # split: "train"
+  # max_samples: 1000  # For quick testing, increase for full experiments
+  # data_subset: "gpqa_diamond"  # Options: gpqa_diamond, gpqa_experts, gpqa_extended
+  name: "gsm8k"  # Can be extended to other datasets
+  split: "test"
+  max_samples: 1000  # For quick testing, increase for full experiments
+  paths: "data/raw/grade-school-math/grade_school_math/data" # Path to GSM8K dataset
+
+model:
+  name: "google/gemma-3-4b-it"
+
+sae:
+  model_name: "google/gemma-scope-2-4b-it"
+
+strategies:
+  direct:
+    max_new_tokens: 512
+    skip: false
+    prompt_template: |
+      {question}\n
+      Give me the answer directly without explanations.<eos>
+
+
+
+  cot:
+    max_new_tokens: 512
+    skip: false
+    prompt_template: |
+      You are a logical reasoning assistant. Solve the user's question by breaking it down into logical steps.
+      Finally, provide the answer in the specified format.
+      Question: {question}\n
+      Let's think step by step:
+      1) Analyze the given information.
+      2) Deduce intermediate conclusions.
+      3) Finalize the answer.\n
+      Format your final response as: 'Therefore, the answer is [your answer].<eos>
+
+  hint:
+    max_new_tokens: 512
+    skip: true
+
+  cot_hint:
+    max_new_tokens: 256
+    skip: true
+
+
+
+
+experiment:
+  output_dir: "./results"
+  random_seed: 42

@@ -22,6 +22,8 @@ from analysis.LatentAnalyzer import LatentAnalyzer
 import numpy as np
 from analysis.SparseAutoEncoder import load_sae, SparseAutoEncoder
 from huggingface_hub import hf_hub_download
+from safetensors.torch import load_file
+from analysis.JumpReLUSAE import JumpReLUSAE
 
 class ExperimentRunner:
     """Simplified runner for strategy comparison experiments."""
@@ -74,11 +76,11 @@ class ExperimentRunner:
         self.model = AutoModelForCausalLM.from_pretrained(
             model_name,
             output_hidden_states=True,
-            torch_dtype=torch.float16,
-            device_map="auto",
+            torch_dtype=torch.float32 if model_name == "google/gemma-3-4b-it" else torch.float16,
+            # device_map="auto",
             # max_memory=max_memory,
             # local_files_only=True
-        )
+        ).to(self.device)
         
         self.model.eval()
 
@@ -110,6 +112,21 @@ class ExperimentRunner:
                     expansion_factor= 16 if sae_model_name=="Goodfire/Llama-3.1-8B-Instruct-SAE-l19" else 8,
                     device=self.device,
                 )
+            elif sae_model_name.startswith("google/"):
+                Layer = hook_layer.split('.')[-1]
+                LAYER = int(Layer)
+                # import pdb; pdb.set_trace()
+                path_to_params = hf_hub_download(
+                    repo_id=self.config.get('sae.model_name'),
+                    filename=f"resid_post/layer_{LAYER}_width_65k_l0_medium/params.safetensors",
+                )
+                params = load_file(path_to_params)
+                d_model, d_sae = params["w_enc"].shape
+                sae = JumpReLUSAE(d_model, d_sae)
+                sae.load_state_dict(params)
+                sae.cuda()
+            elif sae_model_name.startswith("/"):
+                sae = Sae.load_from_disk(os.path.join(sae_model_name, hook_layer))
             else:
                 raise ValueError(f"Unsupported SAE model name: {sae_model_name}")
             self.saes[hook_layer] = sae
@@ -121,14 +138,17 @@ class ExperimentRunner:
     def _initialize_strategies(self):
         """Initialize reasoning strategies."""
         direct_model_config = {
-            'max_new_tokens': self.config.get('strategies.direct.max_new_tokens', 128)
+            'max_new_tokens': self.config.get('strategies.direct.max_new_tokens', 128),
+            'prompt_template': self.config.get('strategies.direct.prompt_template', None)
         }
         
         cot_model_config = {
-            'max_new_tokens': self.config.get('strategies.cot.max_new_tokens', 256)
+            'max_new_tokens': self.config.get('strategies.cot.max_new_tokens', 256),
+            'prompt_template': self.config.get('strategies.cot.prompt_template', None)
         }
         hint_model_config = {
-            'max_new_tokens': self.config.get('strategies.hint.max_new_tokens', 256)
+            'max_new_tokens': self.config.get('strategies.hint.max_new_tokens', 256),
+            'prompt_template': self.config.get('strategies.hint.prompt_template', None) 
         }
         self.strategies = {
             'direct': DirectStrategy(self.model, self.tokenizer, direct_model_config),
@@ -297,7 +317,9 @@ class ExperimentRunner:
             hidden_state = hidden_state.to(sae_dtype)
             # import pdb; pdb.set_trace()
             latent_z = sae.encode(hidden_state)
-            if sae.__class__.__name__ == "SparseAutoEncoder":
+            if sae.__class__.__name__ == "SparseAutoEncoder": # Goodfire 
+                z = latent_z[0]
+            elif sae.__class__.__name__ == "JumpReLUSAE": # Gemma Scope
                 z = latent_z[0]
             else:   
                 z = latent_z[2]  # Top-k activations

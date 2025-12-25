@@ -51,11 +51,6 @@ class BaseStrategy(ABC):
         self.model.config.output_hidden_states = True
         self.model.config.output_attentions = False
         
-        # Add special tokens ONCE during initialization to prevent memory leaks
-        # if "<END>" not in self.tokenizer.get_vocab():
-        #     special_tokens = {"additional_special_tokens": ["<END>"]}
-        #     self.tokenizer.add_special_tokens(special_tokens)
-        #     self.model.resize_token_embeddings(len(self.tokenizer))
     
     @abstractmethod
     def generate_prompt(self, question: str) -> str:
@@ -116,10 +111,19 @@ class BaseStrategy(ABC):
         
         # get <END> token id
         # end_token_id = self.tokenizer.convert_tokens_to_ids("<END>")
-        terminators = [
-            self.tokenizer.eos_token_id,
-            self.tokenizer.convert_tokens_to_ids("<|eot_id|>")
-        ]
+        # terminators = [
+        #     self.tokenizer.eos_token_id,
+        #     self.tokenizer.convert_tokens_to_ids("<|eot_id|>")
+        # ]
+        stop_tokens = ["<|endoftext|>", "<|im_end|>", "<|eot_id|>"]
+        terminators = [self.tokenizer.eos_token_id]  # 默认包含通用 eos
+        for token_text in stop_tokens:
+            t_id = self.tokenizer.convert_tokens_to_ids(token_text)
+            if t_id is not None:
+                terminators.append(t_id)
+
+        # 去重，防止重复 ID
+        terminators = list(set(terminators))
 
         # Set default generation parameters
         gen_kwargs = {
@@ -184,6 +188,18 @@ class BaseStrategy(ABC):
 
                         base_line = sae.decode(latent_z)
                         hidden_steered = sae.decode(steered_pre_acts)
+                    elif sae.__class__.__name__ == "JumpReLUSAE":
+                        latent_z = latent_tuple[0]
+                        pre_acts = latent_tuple[1]
+                        # mask = latent_tuple[2]
+                        steered_pre_acts = pre_acts.clone()
+                        # steered_pre_acts[:, feature_idx] += strength * feature_acts
+                        steered_pre_acts[:, feature_idx] += strength
+                        mask = (steered_pre_acts > sae.threshold)
+                        steered_pre_acts = mask * torch.nn.functional.relu(steered_pre_acts)
+                        base_line = sae.decode(latent_z)
+                        hidden_steered = sae.decode(steered_pre_acts)
+                        
                     else:
 
                         top_acts = latent_tuple[0]      # Top-k activation values
@@ -248,26 +264,38 @@ class BaseStrategy(ABC):
     ) -> Tuple[str, List[torch.Tensor]]:
         
         inputs = self.tokenizer(prompt, return_tensors="pt", return_attention_mask=True).to(self.device)
-        
+        # import pdb; pdb.set_trace()
         # get <END> 的 id (已在__init__中添加)
         # end_token_id = self.tokenizer.convert_tokens_to_ids("<END>")
+        stop_tokens = ["<|endoftext|>", "<|im_end|>", "<|eot_id|>", "<end_of_turn>"]
+        terminators = [self.tokenizer.eos_token_id]  # 默认包含通用 eos
+        # import pdb; pdb.set_trace()
+        for token_text in stop_tokens:
+            t_id = self.tokenizer.convert_tokens_to_ids(token_text)
+            if t_id is not None:
+                terminators.append(t_id)
 
-        terminators = [
-            self.tokenizer.eos_token_id,
-            self.tokenizer.convert_tokens_to_ids("<|eot_id|>")
-        ]
+        # 去重，防止重复 ID
+        terminators = list(set(terminators))
+
+        # terminators = [
+        #     self.tokenizer.eos_token_id,
+        #     self.tokenizer.convert_tokens_to_ids("<|eot_id|>")
+        # ]
         # Set default generation parameters
         gen_kwargs = {
             'do_sample': False,
             'pad_token_id': self.tokenizer.pad_token_id or self.tokenizer.eos_token_id,
             # 'stopping_criteria': self._get_stopping_criteria(end_token_id, len(inputs.input_ids[0])),
+            # 'eos_token_id': self.tokenizer.eos_token_id,
             'eos_token_id': terminators,
             'output_hidden_states': True,
             'return_dict_in_generate': True,
             'max_new_tokens': max_new_tokens,
+            'disable_compile': True,
             **generation_kwargs
         }
-        
+        # import pdb; pdb.set_trace()
         # 3. 准备存每一层、每一步的激活： {layer_name: [step0_vec, step1_vec, ...]}
         activations = {}
         handles = []
@@ -276,11 +304,18 @@ class BaseStrategy(ABC):
         for layer_spec in hook_layers:
             hook_name = layer_spec
             activations[hook_name] = []
-
-            module = self.model.base_model.get_submodule(hook_name)
+            # import pdb; pdb.set_trace()
+            if hasattr(self.model.base_model, "language_model"):
+                module = self.model.base_model.language_model.get_submodule(hook_name)
+            else:
+                module = self.model.base_model.get_submodule(hook_name)
 
             def make_hook(name):
                 def hook_fn(module, inputs, outputs):
+                    # import pdb; pdb.set_trace()
+                    if isinstance(outputs, tuple):
+                        outputs = outputs[0]
+                    # 取最后一个 token 的隐藏状态
                     last_hidden = outputs[0, -1, :].detach().clone()   # [hidden_dim]
                     activations[name].append(last_hidden)
                 return hook_fn
@@ -321,47 +356,10 @@ class BaseStrategy(ABC):
         del generated_ids
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
+        # import pdb; pdb.set_trace()
 
         return generated_text, hidden_states, num_generated_tokens
        
-
-
-    # def _get_stopping_criteria(self, end_token_id: int, input_length: int) -> StoppingCriteriaList:
-    #     """Create stopping criteria for <END> token.
-        
-    #     Args:
-    #         end_token_id: Token ID for <END>
-    #         input_length: Length of input prompt to exclude from checking
-            
-    #     Returns:
-    #         StoppingCriteriaList containing custom stopping criteria
-    #     """
-    #     class EndTokenStoppingCriteria(StoppingCriteria):
-    #         def __init__(self, end_token_id: int, tokenizer, input_length: int):
-    #             self.end_token_id = end_token_id
-    #             self.tokenizer = tokenizer
-    #             self.input_length = input_length
-            
-    #         def __call__(self, input_ids: torch.LongTensor, scores: torch.FloatTensor, **kwargs) -> bool:
-    #             del scores, kwargs  # Unused parameters
-    #             # Only check the newly generated tokens, not the input prompt
-    #             if input_ids.size(1) <= self.input_length:
-    #                 return False
-                    
-    #             generated_tokens = input_ids[0, self.input_length:].tolist()
-    #             if len(generated_tokens) == 0:
-    #                 return False
-                    
-    #             decoded_text = self.tokenizer.decode(generated_tokens, skip_special_tokens=False)
-    #             # Only stop if we see a complete <END> token, not just partial matches
-    #             contains_end = "<END>" in decoded_text and decoded_text.strip().endswith(">")
-    #             # if contains_end:
-    #             #     print(f"Found complete <END> in generated part: {repr(decoded_text)}")
-    #             return contains_end
-        
-    #     return StoppingCriteriaList([EndTokenStoppingCriteria(end_token_id, self.tokenizer, input_length)])
-    
-
     
     @property
     def name(self) -> str:

@@ -21,7 +21,8 @@ class DirectStrategy(BaseStrategy):
         #     "Give me the answer directly without explanations.\n"
         #     "Format your response as: your answer here.<|eot_id|>"
         # )
-        prompt_template = self.config.get('strategy.direct.prompt_template', 
+        # import pdb; pdb.set_trace()
+        prompt_template = self.config.get('prompt_template', 
             "<|begin_of_text|><|start_header_id|>system<|end_header_id|>\n\n"
             "You are a helpful assistant.<|eot_id|>" # 最好加上 System Prompt 明确身份
             "<|start_header_id|>user<|end_header_id|>\n\n"
@@ -113,4 +114,6 @@ class DirectStrategy(BaseStrategy):
         """
         if '<|eot_id|>' in response:
             return response.split('<|eot_id|>')[0].strip()
+        if '<end_of_turn>' in response:
+            return response.split('<end_of_turn>')[0].strip()
         return response.strip()

@@ -3,13 +3,21 @@
 import argparse
 
 from runner import ExperimentRunner
-from my_datasets.dataset_loader import DataLoader, GSM8KLoader, GPQALoader
+from my_datasets.dataset_loader import DataLoader
+from my_datasets.GSM8KLoader import GSM8KLoader
+from my_datasets.GPQALoader import GPQALoader
+from my_datasets.MMLULoader import MMLULoader
+# run_experiment.py 顶部，第一屏代码
 import torch
+# torch._dynamo.disable()
+# torch._dynamo.config.cache_size_limit = 32
 from utils.config import Config
 from analysis.LatentAnalyzer import LatentAnalyzer
 
 def main():
     """Main function for running experiments."""
+    # import torch._dynamo as dynamo
+    # print("dynamo config enabled:", dynamo.config.enabled)
     parser = argparse.ArgumentParser(description="Run planning analysis experiments")
     parser.add_argument(
         '--config', 
@@ -125,6 +133,12 @@ def main():
                 data_subset=config.get('dataset.data_subset', 'gpqa_diamond'),
                 max_samples=config.get('dataset.max_samples', None)
             )
+        elif dt_name == 'mmlu':
+            dt_loader = MMLULoader(
+                base_path=config.get('dataset.paths', ''),
+                max_samples=config.get('dataset.max_samples', None),
+                data_subset=config.get('dataset.data_subset', 'all')
+            )
         else:
             dt_loader = DataLoader(
                 base_path=config.get('dataset.paths', ''),
@@ -154,6 +168,12 @@ def main():
                 base_path=config.get('dataset.paths', ''),
                 data_subset=config.get('dataset.data_subset', 'gpqa_diamond'),
                 max_samples=config.get('dataset.max_samples', None)
+            )
+        elif dt_name == 'mmlu':
+            dt_loader = MMLULoader(
+                base_path=config.get('dataset.paths', ''),
+                max_samples=config.get('dataset.max_samples', None),
+                data_subset=config.get('dataset.data_subset', 'all')
             )
         else:
             dt_loader = DataLoader(

@@ -26,7 +26,7 @@ class ChainOfThoughtStrategy(BaseStrategy):
         #     "..."
         #     "Step n. ...\n<|eot_id|>"
         # )
-        prompt_template = self.config.get('strategies.cot.prompt_template',
+        prompt_template = self.config.get('prompt_template',
             "<|begin_of_text|><|start_header_id|>system<|end_header_id|>\n\n"
             "You are a logical reasoning assistant. Solve the user's question by breaking it down into logical steps. "
             "Finally, provide the answer in the specified format.<|eot_id|>"
@@ -62,17 +62,17 @@ class ChainOfThoughtStrategy(BaseStrategy):
         )
 
         # Parse steps from response
-        steps = self._parse_steps(response)
-        
+        # steps = self._parse_steps(response)
+        parsed_response = self._parse_response(response)
         return StrategyOutput(
             response=response,
             hidden_states=hidden_states,
             num_generated_tokens=num_generated_tokens,
-            steps=steps,
+            # steps=steps,
             metadata={
                 'strategy': 'cot',
                 'prompt': prompt,
-                'answer': response
+                'answer': parsed_response
             }
         )
     
@@ -97,14 +97,14 @@ class ChainOfThoughtStrategy(BaseStrategy):
 
         # Parse response - remove <END> and everything after it
         # steps = self._parse_steps(response)
-        
+        parsed_response = self._parse_response(response)
         return StrategyOutput(
             response=response,
             num_generated_tokens=num_generated_tokens,
             metadata={
                 'strategy': 'direct',
                 'prompt': prompt,
-                'answer': response
+                'answer': parsed_response
             }
         )
 
@@ -139,3 +139,18 @@ class ChainOfThoughtStrategy(BaseStrategy):
             steps = sentences[:5]  # Limit to reasonable number
         
         return steps
+    
+    def _parse_response(self, response: str) -> str:
+        """Parse response by removing <END> and everything after it.
+        
+        Args:
+            response: Raw generated response
+            
+        Returns:
+            Cleaned response without <|eot_id|> token
+        """
+        if '<|eot_id|>' in response:
+            return response.split('<|eot_id|>')[0].strip()
+        if '<end_of_turn>' in response:
+            return response.split('<end_of_turn>')[0].strip()
+        return response.strip()

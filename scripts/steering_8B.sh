@@ -4,9 +4,9 @@ python src/run_experiment.py \
         --steer_layers layers.19\
         --topk 10 \
         --k_index 3 \
-        --device cuda:3 \
+        --device cuda:4 \
         --get_index_type Reason \
-        --steering_target_strategy direct \
+        --steering_target_strategy cot \
         --token_pos 1 \
         --steer_n_steps 1 \
-        --steer_alpha 100.0
+        --steer_alpha 25.0

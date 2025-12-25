@@ -1,0 +1,64 @@
+dataset:
+  # name: "mmlu"
+  # split: "test"
+  # max_samples: 57  # For quick testing, increase for full experiments
+  # data_subset: "all"  # Options: gpqa_diamond, gpqa_experts, gpqa_extended
+  # name: "gpqa"
+  # split: "train"
+  # max_samples: 1000  # For quick testing, increase for full experiments
+  # data_subset: "gpqa_diamond"  # Options: gpqa_diamond, gpqa_experts, gpqa_extended
+  name: "gsm8k"  # Can be extended to other datasets
+  split: "test"
+  max_samples: 10  # For quick testing, increase for full experiments
+  paths: "data/raw/grade-school-math/grade_school_math/data" # Path to GSM8K dataset
+
+model:
+  name: "Qwen/Qwen3-0.6B"
+
+sae:
+  model_name: "/p/realai/guangzhi/sae-faithful-rag/checkpoints/sae-qwen3-0.6bx32_16/unnamed"
+
+strategies:
+  direct:
+    max_new_tokens: 512
+    skip: false
+    prompt_template: |
+      <|im_start|>system
+      You are a helpful assistant.<|im_end|>
+      <|im_start|>user
+      {question}
+      Give me the answer directly without explanations. /no_think
+      <|im_end|>
+      <|im_start|>assistant\n
+
+  cot:
+    max_new_tokens: 512
+    skip: false
+    prompt_template: |
+      <|im_start|>system
+      You are a logical reasoning assistant. Solve the user's question by breaking it down into logical steps. Finally, provide the answer in the specified format.<|im_end|>
+      <|im_start|>user
+      {question}
+
+      Let's think step by step:
+      1) Analyze the given information.
+      2) Deduce intermediate conclusions
+      3) Finalize the answer.
+
+      Format your final response as: 'Therefore, the answer is [your answer].'/think<|im_end|>
+      <|im_start|>assistant
+
+  hint:
+    max_new_tokens: 512
+    skip: true
+
+  cot_hint:
+    max_new_tokens: 256
+    skip: true
+
+
+
+
+experiment:
+  output_dir: "./results"
+  random_seed: 42
