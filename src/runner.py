@@ -62,7 +62,8 @@ class ExperimentRunner:
         """Load model and tokenizer."""
         transformers.logging.set_verbosity_error()
         model_name = self.config.get('model.name', 'gpt2-medium')
-        # max_memory = {0: "0GiB", 1: "0GiB", 2: "0GiB", 3: "20GiB", 4: "20GiB", 5: "20GiB", 6: "20GiB", 7: "20GiB"}
+        max_memory = {0: "81GiB", 1: "81GiB", 2: "81GiB", 3: "0GiB"}
+        # max_memory = {0: "0GiB", 1: "48GiB", 2: "0GiB", 3: "0GiB", 4: "0GiB", 5: "0GiB", 6: "0GiB", 7: "0GiB"}
         print(f"Loading model: {model_name}")
         self.tokenizer = AutoTokenizer.from_pretrained(
             model_name,
@@ -76,11 +77,10 @@ class ExperimentRunner:
         self.model = AutoModelForCausalLM.from_pretrained(
             model_name,
             output_hidden_states=True,
-            torch_dtype=torch.float32 if model_name == "google/gemma-3-4b-it" else torch.float16,
-            # device_map="auto",
+            torch_dtype=torch.float32 if model_name.startswith("google/") else torch.float16,
+            device_map="auto",
             # max_memory=max_memory,
-            # local_files_only=True
-        ).to(self.device)
+        )
         
         self.model.eval()
 
@@ -118,13 +118,17 @@ class ExperimentRunner:
                 # import pdb; pdb.set_trace()
                 path_to_params = hf_hub_download(
                     repo_id=self.config.get('sae.model_name'),
-                    filename=f"resid_post/layer_{LAYER}_width_65k_l0_medium/params.safetensors",
+                    filename=f"resid_post/layer_{LAYER}_width_262k_l0_medium/params.safetensors",
                 )
                 params = load_file(path_to_params)
                 d_model, d_sae = params["w_enc"].shape
                 sae = JumpReLUSAE(d_model, d_sae)
                 sae.load_state_dict(params)
-                sae.cuda()
+                # sae.cuda()
+                # import pdb; pdb.set_trace()
+                hidden_device = next(self.model.language_model.get_submodule(hook_layer).parameters()).device
+                # sae.to(hidden_device)
+                # sae.to(self.device)
             elif sae_model_name.startswith("/"):
                 sae = Sae.load_from_disk(os.path.join(sae_model_name, hook_layer))
             else:
@@ -185,7 +189,21 @@ class ExperimentRunner:
             print(f"Running {strategy_name} strategy...")
             strategy_results = []
             
+            strategy_results = self._load_strategy_answers(strategy_name)
+            layer_latent_zs, num_features = self._load_latent_zs(self.args.hook_layers, strategy_name)
+            if len(strategy_results) != num_features:
+                print(f"Mismatch in loaded results and latent zs for {strategy_name}, recomputing...")
+                strategy_results = []
+                layer_latent_zs = {}
+            if len(strategy_results) == len(qa_pairs):
+                print(f"All results for {strategy_name} already computed, skipping...")
+                results[strategy_name] = strategy_results
+                continue
+            # import pdb; pdb.set_trace()   
+
             for i, qa_pair in enumerate(tqdm(qa_pairs, desc=f"{strategy_name}")):
+                if len(strategy_results) > i:
+                    continue  # Skip already computed results
                 question = qa_pair['question']
                 ground_truth = qa_pair['answer']
                 
@@ -217,22 +235,25 @@ class ExperimentRunner:
                 }
                 
                 strategy_results.append(result)
-                
+                if (i+1) % 50 == 0:
+                    self._save_strategy_answers(strategy_results, strategy_name)
+                    self._save_latent_zs(layer_latent_zs, strategy_name)
+
             results[strategy_name] = strategy_results
             
             self._save_strategy_answers(strategy_results, strategy_name)
-
-            for layer, zs in layer_latent_zs.items(): # 要不要把question_idx也存上
-                layer_dir = self.output_dir / "latent_z" / self.config.get('dataset.name') / layer
-                layer_dir.mkdir(parents=True, exist_ok=True)
-                if self.args.type_of_analysis:
-                    filename = f"{strategy_name}_latentz_{self.args.type_of_analysis}_{self.config.get('dataset.max_samples')}.pkl"
-                else:
-                    filename = f"{strategy_name}_latentz_tokenpos{self.args.token_pos}_{self.config.get('dataset.max_samples')}.pkl"
-                filepath = layer_dir / filename
-                with open(filepath, 'wb') as f:
-                    pickle.dump(zs, f)
-                print(f"Latent zs for {layer} and strategy {strategy_name} saved to {filepath}")
+            self._save_latent_zs(layer_latent_zs, strategy_name)
+            # for layer, zs in layer_latent_zs.items(): # 要不要把question_idx也存上
+            #     layer_dir = self.output_dir / "latent_z" / self.config.get('dataset.name') / layer
+            #     layer_dir.mkdir(parents=True, exist_ok=True)
+            #     if self.args.type_of_analysis:
+            #         filename = f"{strategy_name}_latentz_{self.args.type_of_analysis}_{self.config.get('dataset.max_samples')}.pkl"
+            #     else:
+            #         filename = f"{strategy_name}_latentz_tokenpos{self.args.token_pos}_{self.config.get('dataset.max_samples')}.pkl"
+            #     filepath = layer_dir / filename
+            #     with open(filepath, 'wb') as f:
+            #         pickle.dump(zs, f)
+            #     print(f"Latent zs for {layer} and strategy {strategy_name} saved to {filepath}")
 
 
         return results
@@ -295,6 +316,8 @@ class ExperimentRunner:
             }
             
             results.append(result)
+            if (i+1) % 50 == 0:
+                self._save_strategy_answers(results, target_strategy+"_steered_"+self.args.get_index_type)
                 
             
         self._save_strategy_answers(results, target_strategy+"_steered_"+self.args.get_index_type)
@@ -308,7 +331,11 @@ class ExperimentRunner:
             # print(f"Processing hidden state from {hookpoint} with SAE...")
             if hasattr(self.model, "hf_device_map"):
                 # 找到该层对应的设备，例如 "cuda:1"
-                target_device = self.model.hf_device_map.get(hookpoint, self.device)
+                if hasattr(self.model.base_model, "language_model"):
+                    # layer_module = self.model.base_model.language_model.get_submodule(layer_name)
+                    target_device = self.model.hf_device_map.get("model.language_model." + hookpoint, self.device)
+                else:
+                    target_device = self.model.hf_device_map.get(hookpoint, self.device)
             else:
                 target_device = self.device
             hidden_state = hidden_state.to(target_device)
@@ -338,7 +365,69 @@ class ExperimentRunner:
         return result_zs
         
     
+    def _save_latent_zs(
+        self, 
+        layer_latent_zs: Any,
+        strategy_name: str
+    ) -> None:
+        """Save latent representations to file.
+        
+        Args:
+            layer: Layer name
+            strategy_name: Strategy name
+            latent_zs: List of latent representations
+            timestamp: Experiment timestamp
+        """
+        
+        for layer, zs in layer_latent_zs.items(): # 要不要把question_idx也存上
+            layer_dir = self.output_dir / "latent_z" / self.config.get('dataset.name') / layer
+            layer_dir.mkdir(parents=True, exist_ok=True)
+            if self.args.type_of_analysis:
+                filename = f"{strategy_name}_latentz_{self.args.type_of_analysis}_{self.config.get('dataset.max_samples')}.pkl"
+            else:
+                filename = f"{strategy_name}_latentz_tokenpos{self.args.token_pos}_{self.config.get('dataset.max_samples')}.pkl"
+            filepath = layer_dir / filename
+            with open(filepath, 'wb') as f:
+                pickle.dump(zs, f)
+            print(f"Latent zs for {layer} and strategy {strategy_name} saved to {filepath}")
 
+
+    def _load_latent_zs(
+        self, 
+        layers: List[str],
+        strategy_name: str
+    ) -> List[Any]:
+        """Load latent representations from file.
+        
+        Args:
+            layer: Layer name
+            strategy_name: Strategy name
+            
+        Returns:
+            List of latent representations
+        """
+        layer_latent_zs = {}
+        previous_num_features = 0
+        for layer in layers:
+            layer_dir = self.output_dir / "latent_z" / self.config.get('dataset.name') / layer
+            if self.args.type_of_analysis:
+                filename = f"{strategy_name}_latentz_{self.args.type_of_analysis}_{self.config.get('dataset.max_samples')}.pkl"
+            else:
+                filename = f"{strategy_name}_latentz_tokenpos{self.args.token_pos}_{self.config.get('dataset.max_samples')}.pkl"
+            filepath = layer_dir / filename
+            if not os.path.exists(filepath):
+                print(f"No saved latent zs found for {layer} and strategy {strategy_name} at {filepath}")
+                return {}, 0
+            with open(filepath, 'rb') as f:
+                latent_zs = pickle.load(f)
+            # import pdb; pdb.set_trace()
+            num_features = len(latent_zs)
+            if previous_num_features != 0 and num_features != previous_num_features:
+                raise ValueError(f"Mismatch in number of features for layer {layer}: expected {previous_num_features}, got {num_features}")
+            previous_num_features = num_features
+            layer_latent_zs[layer] = latent_zs
+            print(f"Latent zs for {layer} and strategy {strategy_name} loaded from {filepath}")
+        return layer_latent_zs, previous_num_features
     
     def _save_questions(
         self, 
@@ -364,6 +453,36 @@ class ExperimentRunner:
         
         print(f"Questions saved to {filepath}")
     
+    def _load_strategy_answers(
+        self, 
+        strategy_name: str
+    ) -> List[Dict[str, Any]]:
+        pass
+        if strategy_name.endswith("_steered_"+self.args.get_index_type):
+            if self.args.k_index is None:
+                if self.args.type_of_analysis:
+                    filepath = self.output_dir / "answers" / self.config.get('dataset.name') / self.args.steer_layers[0] / f"{strategy_name}_{self.args.type_of_analysis}_nsteps{self.args.steer_n_steps}_alpha{self.args.steer_alpha}_TopK{self.args.topk}_{self.config.get('dataset.max_samples')}.json"
+                else:
+                    filepath = self.output_dir / "answers" / self.config.get('dataset.name') / self.args.steer_layers[0] / f"{strategy_name}_tokenpos{self.args.token_pos}_nsteps{self.args.steer_n_steps}_alpha{self.args.steer_alpha}_TopK{self.args.topk}_{self.config.get('dataset.max_samples')}.json"
+            else:
+                first_layer = self.args.steer_layers[0]
+                _, feaature_idx = self.features[first_layer]
+                index = feaature_idx[self.args.k_index]
+                if self.args.type_of_analysis:
+                    filepath = self.output_dir / "answers" / self.config.get('dataset.name') / self.args.steer_layers[0] / f"{strategy_name}_{self.args.type_of_analysis}_nsteps{self.args.steer_n_steps}_alpha{self.args.steer_alpha}_featureidx{index}_{self.config.get('dataset.max_samples')}.json"
+                else:
+                    filepath = self.output_dir / "answers" / self.config.get('dataset.name') / self.args.steer_layers[0] / f"{strategy_name}_tokenpos{self.args.token_pos}_nsteps{self.args.steer_n_steps}_alpha{self.args.steer_alpha}_featureidx{index}_{self.config.get('dataset.max_samples')}.json"
+        else:
+            filepath = self.output_dir / "answers" / self.config.get('dataset.name') / f"{strategy_name}_{self.config.get('dataset.max_samples')}.json"
+        if not os.path.exists(filepath):
+            print(f"No saved results found for {strategy_name} at {filepath}")
+            return []
+        with open(filepath, 'r') as f:
+            answers_data = json.load(f)
+        
+        print(f"Results for {strategy_name} loaded from {filepath} (Accuracy: {answers_data.get('accuracy', 0):.2%})")
+        return answers_data.get('results', [])
+
     def _save_strategy_answers(
         self, 
         strategy_results: List[Dict[str, Any]], 

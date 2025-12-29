@@ -115,7 +115,7 @@ class BaseStrategy(ABC):
         #     self.tokenizer.eos_token_id,
         #     self.tokenizer.convert_tokens_to_ids("<|eot_id|>")
         # ]
-        stop_tokens = ["<|endoftext|>", "<|im_end|>", "<|eot_id|>"]
+        stop_tokens = ["<|endoftext|>", "<|im_end|>", "<|eot_id|>", "<end_of_turn>"]
         terminators = [self.tokenizer.eos_token_id]  # 默认包含通用 eos
         for token_text in stop_tokens:
             t_id = self.tokenizer.convert_tokens_to_ids(token_text)
@@ -145,17 +145,30 @@ class BaseStrategy(ABC):
             if sae is None:
                 print(f"Warning: No SAE found for layer {layer_name}, skipping")
                 continue
+            # import pdb; pdb.set_trace()
             if hasattr(self.model, "hf_device_map"):
                 # 找到该层对应的设备，例如 "cuda:1"
-                target_device = self.model.hf_device_map.get(layer_name, self.device)
+                if hasattr(self.model.base_model, "language_model"):
+                    # layer_module = self.model.base_model.language_model.get_submodule(layer_name)
+                    target_device = self.model.hf_device_map.get("model.language_model." + layer_name, self.device)
+                else:
+                    target_device = self.model.hf_device_map.get("model." + layer_name, self.device)
             else:
                 target_device = self.device
             feature_acts, feature_idx = feature  
-            feature_acts = torch.tensor(feature_acts, device=self.device, dtype=torch.float16)
+            # if 
+            # feature_acts = torch.tensor(feature_acts, device=target_device, dtype=torch.float16)
+            feature_idx = torch.tensor(feature_idx, device=target_device, dtype=torch.long)
+            sae = sae.to(target_device)
             # feature_idx = torch.tensor(feature_idx, device=self.device, dtype=torch.float16)
             # Get the module to hook
             # import pdb; pdb.set_trace()
-            module = self.model.base_model.get_submodule(layer_name)
+            # module = self.model.base_model.get_submodule(layer_name)
+            if hasattr(self.model.base_model, "language_model"):
+                module = self.model.base_model.language_model.get_submodule(layer_name)
+            else:
+                module = self.model.base_model.get_submodule(layer_name)
+
             
             def make_steering_hook(sae_model, feature_acts, feature_idx, strength, n_steps=1):
                 remaining = n_steps
@@ -163,14 +176,17 @@ class BaseStrategy(ABC):
                     nonlocal remaining
                     if remaining <= 0:
                         return outputs
-                    
+                    # import pdb; pdb.set_trace()
+                    tuple_flag = isinstance(outputs, tuple)
+                    if tuple_flag:
+                        outputs = outputs[0]
                     hidden = outputs[0]  # [seq, hidden_dim] 取第一个batch
                     # import pdb; pdb.set_trace()
                     # Only steer the last token position
                     last_hidden = hidden[-1:, :]  # [1, hidden_dim]
                     
                     # Move SAE to same device and dtype
-                    sae = sae_model.to(last_hidden.device)
+                    # sae = sae_model.to(last_hidden.device)
                     sae_dtype = next(sae.parameters()).dtype
                     last_hidden_typed = last_hidden.to(sae_dtype)
                     # import pdb; pdb.set_trace()
@@ -182,7 +198,8 @@ class BaseStrategy(ABC):
                         steered_pre_acts = pre_acts.clone()
                         # import pdb; pdb.set_trace()
                         # steered_pre_acts[:, feature_idx] += strength * feature_acts
-                        steered_pre_acts[:, feature_idx] += strength
+                        mean_feat = torch.mean(torch.abs(steered_pre_acts[:, feature_idx]))
+                        steered_pre_acts[:, feature_idx] += strength* mean_feat
                         # steered_pre_acts[:, feature_idx] =0
                         steered_pre_acts = torch.nn.functional.relu(steered_pre_acts)
 
@@ -193,20 +210,26 @@ class BaseStrategy(ABC):
                         pre_acts = latent_tuple[1]
                         # mask = latent_tuple[2]
                         steered_pre_acts = pre_acts.clone()
+                        # import pdb; pdb.set_trace()
                         # steered_pre_acts[:, feature_idx] += strength * feature_acts
-                        steered_pre_acts[:, feature_idx] += strength
+                        mean_feat = torch.mean(torch.abs(steered_pre_acts[:, feature_idx]))
+                        steered_pre_acts[:, feature_idx] += strength* mean_feat
+                        # steered_pre_acts[:, feature_idx] = steered_pre_acts[:, feature_idx] + strength
                         mask = (steered_pre_acts > sae.threshold)
                         steered_pre_acts = mask * torch.nn.functional.relu(steered_pre_acts)
+                        
+                        # steered_pre_acts = torch.nn.functional.relu(steered_pre_acts)
                         base_line = sae.decode(latent_z)
                         hidden_steered = sae.decode(steered_pre_acts)
-                        
+                        # import pdb; pdb.set_trace()
                     else:
 
                         top_acts = latent_tuple[0]      # Top-k activation values
                         top_indices = latent_tuple[1]   # Top-k feature indices
                         pre_acts = latent_tuple[2]  # Pre-activation values (if applicable) 
                         steered_pre_acts = pre_acts.clone()
-                        steered_pre_acts[:, feature_idx] += strength 
+                        mean_feat = torch.mean(torch.abs(steered_pre_acts[:, feature_idx]))
+                        steered_pre_acts[:, feature_idx] += strength * mean_feat
                         top_acts_steered, top_indices_steered = torch.topk(steered_pre_acts, k=top_acts.size(1), sorted=False)
                     
                     # Decode back to hidden space
@@ -220,11 +243,14 @@ class BaseStrategy(ABC):
                     outputs = hidden.unsqueeze(dim=0)  # Return as tuple
                     # Return modified output tuple
                     remaining -= 1
+                    # import pdb; pdb.set_trace()
+                    if tuple_flag:
+                        outputs = (outputs,)
                     return outputs
                 
                 return hook_fn
             if k_index is None:
-                h = module.register_forward_hook(make_steering_hook(sae, feature_acts, feature_idx[3:5], alpha, n_steps=n_steps))
+                h = module.register_forward_hook(make_steering_hook(sae, feature_acts, feature_idx[5:15], alpha, n_steps=n_steps))
             else:
                 h = module.register_forward_hook(make_steering_hook(sae, feature_acts, [feature_idx[k_index]], alpha, n_steps=n_steps))
             handles.append(h)
