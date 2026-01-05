@@ -83,6 +83,148 @@ class BaseStrategy(ABC):
 
         pass
 
+    def generate_to_get_activations(
+        self,
+        prompt: str,
+        features: Dict[str, torch.Tensor],  # {layer_name: feature_indices}
+        k_index: int,
+        max_new_tokens: Optional[int] = None,
+        saes: Dict[str, Any] = None,  # {layer_name: sae_model}
+        **generation_kwargs
+    ) -> str:
+        """Generate response with SAE steering on specified layers.
+        
+        Args:
+            prompt: Input prompt
+            hook_layers_idx: Dict mapping layer names to feature indices to steer
+            max_new_tokens: Maximum number of new tokens to generate
+            saes: Dict mapping layer names to SAE models
+            alpha: Steering strength multiplier
+            **generation_kwargs: Additional generation arguments
+            
+        Returns:
+            Generated text string
+        """
+        inputs = self.tokenizer(prompt, return_tensors="pt", return_attention_mask=True).to(self.model.device)
+        
+        # get <END> token id
+        # end_token_id = self.tokenizer.convert_tokens_to_ids("<END>")
+        # terminators = [
+        #     self.tokenizer.eos_token_id,
+        #     self.tokenizer.convert_tokens_to_ids("<|eot_id|>")
+        # ]
+        stop_tokens = ["<|endoftext|>", "<|im_end|>", "<|eot_id|>", "<end_of_turn>"]
+        terminators = [self.tokenizer.eos_token_id]  # 默认包含通用 eos
+        for token_text in stop_tokens:
+            t_id = self.tokenizer.convert_tokens_to_ids(token_text)
+            if t_id is not None:
+                terminators.append(t_id)
+
+        # 去重，防止重复 ID
+        terminators = list(set(terminators))
+
+        # Set default generation parameters
+        gen_kwargs = {
+            'do_sample': False,
+            'pad_token_id': self.tokenizer.pad_token_id or self.tokenizer.eos_token_id,
+            # 'stopping_criteria': self._get_stopping_criteria(end_token_id, len(inputs.input_ids[0])),
+            'eos_token_id': terminators,
+            'output_hidden_states': True,
+            'return_dict_in_generate': True,
+            'max_new_tokens': max_new_tokens,
+            **generation_kwargs
+        }
+        
+        handles = []
+        activations = {}
+
+       
+        # Register forward hooks for steering
+        for layer_name, feature in features.items():
+            sae = saes.get(layer_name)
+            if sae is None:
+                print(f"Warning: No SAE found for layer {layer_name}, skipping")
+                continue
+
+            if hasattr(self.model, "hf_device_map"):
+                # 找到该层对应的设备，例如 "cuda:1"
+                if hasattr(self.model.base_model, "language_model"):
+                    # layer_module = self.model.base_model.language_model.get_submodule(layer_name)
+                    target_device = self.model.hf_device_map.get("model.language_model." + layer_name, self.device)
+                else:
+                    target_device = self.model.hf_device_map.get("model." + layer_name, self.device)
+            else:
+                target_device = self.device
+            _, feature_idx = feature  
+
+            feature_idx = torch.tensor(feature_idx, device=target_device, dtype=torch.long)
+            sae = sae.to(target_device)
+            if hasattr(self.model.base_model, "language_model"):
+                module = self.model.base_model.language_model.get_submodule(layer_name)
+            else:
+                module = self.model.base_model.get_submodule(layer_name)
+
+            activations[layer_name] = []
+
+            def make_act_hook(layer_name, sae_model,  feature_idx):
+                def hook_fn(module, inputs, outputs):
+                    # import pdb; pdb.set_trace()
+                    tuple_flag = isinstance(outputs, tuple)
+                    if tuple_flag:
+                        hidden = outputs[0][0]
+                    else:
+                        hidden = outputs[0]  # [seq, hidden_dim] 取第一个batch
+
+                    last_hidden = hidden[-1:, :]  # [1, hidden_dim]
+                    
+                    sae_dtype = next(sae_model.parameters()).dtype
+                    last_hidden_typed = last_hidden.to(sae_dtype)
+                    latent_tuple = sae_model.encode(last_hidden_typed)  # [batch, latent_dim]
+                    if sae_model.__class__.__name__ == "SparseAutoEncoder" or sae_model.__class__.__name__ == "JumpReLUSAE":
+                        latent_z = latent_tuple[0]
+                        res = latent_z.detach().cpu()
+                        res = res[:, feature_idx].squeeze(0)
+                        activations[layer_name].append(res.detach().float().cpu())
+
+                    else:
+                        raise NotImplementedError
+                        top_acts = latent_tuple[0]      # Top-k activation values
+                        top_indices = latent_tuple[1]   # Top-k feature indices
+                        pre_acts = latent_tuple[2]  # Pre-activation values (if applicable) 
+                        steered_pre_acts = pre_acts.clone()
+                        mean_feat = torch.mean(torch.abs(steered_pre_acts[:, feature_idx]))
+                        top_acts_steered, top_indices_steered = torch.topk(steered_pre_acts, k=top_acts.size(1), sorted=False)
+                    
+                    return outputs
+                return hook_fn
+
+            if k_index is None:
+                h = module.register_forward_hook(make_act_hook(layer_name, sae, feature_idx[:3]))
+            else:
+                h = module.register_forward_hook(make_act_hook(layer_name, sae, [feature_idx[k_index]]))
+            handles.append(h)
+        
+        # Generate with steering
+        with torch.no_grad():
+            outputs = self.model.generate(
+                inputs.input_ids,
+                attention_mask=inputs.attention_mask,
+                **gen_kwargs
+            )
+        
+        # Remove all hooks
+        for h in handles:
+            h.remove()
+        
+        # Cleanup
+        del outputs
+        del inputs
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+        
+        return activations
+
+
     def generate_steered_response(
         self,
         prompt: str,
@@ -171,56 +313,76 @@ class BaseStrategy(ABC):
 
             
             def make_steering_hook(sae_model, feature_acts, feature_idx, strength, n_steps=1):
-                remaining = n_steps
+                remaining = n_steps if n_steps is not None and n_steps > 0 else None
                 def hook_fn(module, inputs, outputs):
                     nonlocal remaining
-                    if remaining <= 0:
+                    if remaining is None:
+                        pass
+                    elif remaining <= 0:
+                        return outputs
+                    elif remaining == 1:
+                        pass
+                    else:
+                        # print("remaining:", remaining)
+                        remaining -= 1
                         return outputs
                     # import pdb; pdb.set_trace()
+                    # print(f"Steering at layer {layer_name}, remaining steps: {remaining}")
                     tuple_flag = isinstance(outputs, tuple)
                     if tuple_flag:
                         outputs = outputs[0]
                     hidden = outputs[0]  # [seq, hidden_dim] 取第一个batch
                     # import pdb; pdb.set_trace()
                     # Only steer the last token position
-                    last_hidden = hidden[-1:, :]  # [1, hidden_dim]
+                    if remaining is None:
+                        last_hidden = hidden[-256:, :]  # [1, hidden_dim]
+                    else:
+                        last_hidden = hidden[-1:, :]  # [1, hidden_dim]
                     
                     # Move SAE to same device and dtype
                     # sae = sae_model.to(last_hidden.device)
-                    sae_dtype = next(sae.parameters()).dtype
+                    sae_dtype = next(sae_model.parameters()).dtype
                     last_hidden_typed = last_hidden.to(sae_dtype)
                     # import pdb; pdb.set_trace()
                     # Encode to latent space
-                    latent_tuple = sae.encode(last_hidden_typed)  # [batch, latent_dim]
-                    if sae.__class__.__name__ == "SparseAutoEncoder":
+                    latent_tuple = sae_model.encode(last_hidden_typed)  # [batch, latent_dim]
+                    if sae_model.__class__.__name__ == "SparseAutoEncoder":
                         latent_z = latent_tuple[0]
                         pre_acts = latent_tuple[1]
                         steered_pre_acts = pre_acts.clone()
                         # import pdb; pdb.set_trace()
                         # steered_pre_acts[:, feature_idx] += strength * feature_acts
-                        mean_feat = torch.mean(torch.abs(steered_pre_acts[:, feature_idx]))
-                        steered_pre_acts[:, feature_idx] += strength* mean_feat
+                        
+                        
+                        if remaining is None:
+                            steered_pre_acts[:, feature_idx] = -1
+                        else:
+                            mean_feat = torch.mean(torch.abs(steered_pre_acts[:, feature_idx]))
+                            steered_pre_acts[:, feature_idx] += strength* mean_feat
                         # steered_pre_acts[:, feature_idx] =0
                         steered_pre_acts = torch.nn.functional.relu(steered_pre_acts)
 
-                        base_line = sae.decode(latent_z)
-                        hidden_steered = sae.decode(steered_pre_acts)
-                    elif sae.__class__.__name__ == "JumpReLUSAE":
+                        base_line = sae_model.decode(latent_z)
+                        hidden_steered = sae_model.decode(steered_pre_acts)
+                    elif sae_model.__class__.__name__ == "JumpReLUSAE":
                         latent_z = latent_tuple[0]
                         pre_acts = latent_tuple[1]
                         # mask = latent_tuple[2]
                         steered_pre_acts = pre_acts.clone()
                         # import pdb; pdb.set_trace()
                         # steered_pre_acts[:, feature_idx] += strength * feature_acts
-                        mean_feat = torch.mean(torch.abs(steered_pre_acts[:, feature_idx]))
-                        steered_pre_acts[:, feature_idx] += strength* mean_feat
+                        if remaining is None:
+                            steered_pre_acts[:, feature_idx] = -1000000
+                        else:
+                            mean_feat = torch.mean(torch.abs(steered_pre_acts[:, feature_idx]))
+                            steered_pre_acts[:, feature_idx] += strength* mean_feat
                         # steered_pre_acts[:, feature_idx] = steered_pre_acts[:, feature_idx] + strength
-                        mask = (steered_pre_acts > sae.threshold)
+                        mask = (steered_pre_acts > sae_model.threshold)
                         steered_pre_acts = mask * torch.nn.functional.relu(steered_pre_acts)
                         
                         # steered_pre_acts = torch.nn.functional.relu(steered_pre_acts)
-                        base_line = sae.decode(latent_z)
-                        hidden_steered = sae.decode(steered_pre_acts)
+                        base_line = sae_model.decode(latent_z)
+                        hidden_steered = sae_model.decode(steered_pre_acts)
                         # import pdb; pdb.set_trace()
                     else:
 
@@ -228,21 +390,27 @@ class BaseStrategy(ABC):
                         top_indices = latent_tuple[1]   # Top-k feature indices
                         pre_acts = latent_tuple[2]  # Pre-activation values (if applicable) 
                         steered_pre_acts = pre_acts.clone()
-                        mean_feat = torch.mean(torch.abs(steered_pre_acts[:, feature_idx]))
-                        steered_pre_acts[:, feature_idx] += strength * mean_feat
+                        if remaining is None:
+                            steered_pre_acts[:, feature_idx] = -100000
+                        else:
+                            mean_feat = torch.mean(torch.abs(steered_pre_acts[:, feature_idx]))
+                            steered_pre_acts[:, feature_idx] += strength* mean_feat
                         top_acts_steered, top_indices_steered = torch.topk(steered_pre_acts, k=top_acts.size(1), sorted=False)
                     
                     # Decode back to hidden space
-                        hidden_steered = sae.decode(top_acts_steered, top_indices_steered)  # [batch, hidden_dim]
-                        base_line = sae.decode(top_acts, top_indices)
+                        hidden_steered = sae_model.decode(top_acts_steered, top_indices_steered)  # [batch, hidden_dim]
+                        base_line = sae_model.decode(top_acts, top_indices)
                     increment = hidden_steered - base_line
                     hidden_steered = last_hidden_typed + increment
                     # import pdb; pdb.set_trace()
+                    if remaining is None:
+                        hidden_steered = hidden_steered[-1, :]  # [hidden_dim]
                     # Replace the last token's hidden state
                     hidden[-1, :] = hidden_steered.to(hidden.dtype)
                     outputs = hidden.unsqueeze(dim=0)  # Return as tuple
                     # Return modified output tuple
-                    remaining -= 1
+                    if remaining is not None:
+                        remaining -= 1
                     # import pdb; pdb.set_trace()
                     if tuple_flag:
                         outputs = (outputs,)
@@ -386,7 +554,77 @@ class BaseStrategy(ABC):
 
         return generated_text, hidden_states, num_generated_tokens
        
+    def generate(
+        self,
+        prompt: str,
+        max_new_tokens: Optional[int] = None,
+        **generation_kwargs
+    ) -> Tuple[str, List[torch.Tensor]]:
+        
+        inputs = self.tokenizer(prompt, return_tensors="pt", return_attention_mask=True).to(self.device)
+
+        stop_tokens = ["<|endoftext|>", "<|im_end|>", "<|eot_id|>", "<end_of_turn>"]
+        terminators = [self.tokenizer.eos_token_id]  # 默认包含通用 eos
+
+        for token_text in stop_tokens:
+            t_id = self.tokenizer.convert_tokens_to_ids(token_text)
+            if t_id is not None:
+                terminators.append(t_id)
+
+        terminators = list(set(terminators))
+
+        gen_kwargs = {
+            'do_sample': False,
+            'pad_token_id': self.tokenizer.pad_token_id or self.tokenizer.eos_token_id,
+            'eos_token_id': terminators,
+            'output_hidden_states': True,
+            'return_dict_in_generate': True,
+            'max_new_tokens': max_new_tokens,
+            'disable_compile': True,
+            **generation_kwargs
+        }
+        with torch.no_grad():
+            outputs = self.model.generate(
+                inputs.input_ids,
+                attention_mask=inputs.attention_mask,
+                **gen_kwargs
+            )
+
+
+        # 7. 解码生成文本
+        generated_ids = outputs.sequences[0][len(inputs.input_ids[0]):]
+        generated_text = self.tokenizer.decode(generated_ids, skip_special_tokens=False)
+        num_generated_tokens = len(generated_ids)
+     
+        # 9. 清理显存
+        del outputs
+        del inputs
+        del generated_ids
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+        # import pdb; pdb.set_trace()
+
+        return generated_text, num_generated_tokens
     
+    
+    
+    def _parse_response(self, response: str) -> str:
+        """Parse response by removing <END> and everything after it.
+        
+        Args:
+            response: Raw generated response
+            
+        Returns:
+            Cleaned response without <|eot_id|> token
+        """
+        if '<|eot_id|>' in response:
+            return response.split('<|eot_id|>')[0].strip()
+        if '<end_of_turn>' in response:
+            return response.split('<end_of_turn>')[0].strip()
+        if '<eos>' in response:
+            return response.split('<eos>')[0].strip()
+        return response.strip()
+
     @property
     def name(self) -> str:
         """Get strategy name."""

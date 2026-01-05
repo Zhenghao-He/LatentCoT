@@ -24,7 +24,8 @@ from analysis.SparseAutoEncoder import load_sae, SparseAutoEncoder
 from huggingface_hub import hf_hub_download
 from safetensors.torch import load_file
 from analysis.JumpReLUSAE import JumpReLUSAE
-
+from utils.tools import add_with_zero_pad
+from scipy.stats import pointbiserialr
 class ExperimentRunner:
     """Simplified runner for strategy comparison experiments."""
     
@@ -62,8 +63,11 @@ class ExperimentRunner:
         """Load model and tokenizer."""
         transformers.logging.set_verbosity_error()
         model_name = self.config.get('model.name', 'gpt2-medium')
-        max_memory = {0: "81GiB", 1: "81GiB", 2: "81GiB", 3: "0GiB"}
-        # max_memory = {0: "0GiB", 1: "48GiB", 2: "0GiB", 3: "0GiB", 4: "0GiB", 5: "0GiB", 6: "0GiB", 7: "0GiB"}
+        max_memory = {0: "0GiB", 1: "81GiB", 2: "81GiB", 3: "0GiB"}
+        # max_memory = {0: "15GiB", 1: "15GiB", 2: "30GiB", 3: "48GiB"}
+        # max_memory = {0: "3GiB", 1: "48GiB", 2: "48GiB", 3: "48GiB", 4: "48GiB", 5: "48GiB", 6: "48GiB", 7: "10GiB"}
+        # max_memory = {0: "0GiB", 1: "0GiB", 2: "0GiB", 3: "48GiB", 4: "48GiB", 5: "0GiB", 6: "0GiB", 7: "0GiB"}
+        # max_memory = {0: "0GiB", 1: "48GiB", 2: "48GiB", 3: "0GiB", 4: "0GiB", 5: "0GiB", 6: "0GiB", 7: "0GiB"}
         print(f"Loading model: {model_name}")
         self.tokenizer = AutoTokenizer.from_pretrained(
             model_name,
@@ -73,14 +77,20 @@ class ExperimentRunner:
         if self.tokenizer.pad_token is None:
             self.tokenizer.pad_token = self.tokenizer.eos_token
             self.tokenizer.pad_token_id = self.tokenizer.eos_token_id
-        
-        self.model = AutoModelForCausalLM.from_pretrained(
-            model_name,
-            output_hidden_states=True,
-            torch_dtype=torch.float32 if model_name.startswith("google/") else torch.float16,
-            device_map="auto",
-            # max_memory=max_memory,
-        )
+        if self.args.multi_gpu:
+            self.model = AutoModelForCausalLM.from_pretrained(
+                model_name,
+                output_hidden_states=True,
+                torch_dtype=torch.float32 if model_name.startswith("google/") else torch.float16,
+                device_map="auto",
+                max_memory=max_memory,
+            )
+        else:
+            self.model = AutoModelForCausalLM.from_pretrained(
+                model_name,
+                output_hidden_states=True,
+                torch_dtype=torch.float32 if model_name.startswith("google/") else torch.float16,
+            ).to(self.device)
         
         self.model.eval()
 
@@ -93,6 +103,9 @@ class ExperimentRunner:
         self.saes = {}
         sae_model_name = self.config.get('sae.model_name', '')
         hook_layers = self.args.hook_layers if self.args.hook_layers else self.args.steer_layers
+        if hook_layers is None:
+            print("No hook layers specified for SAE loading.")
+            return
         for hook_layer in hook_layers:
             print(f"Loading SAE for {hook_layer}...")
             if sae_model_name.startswith("EleutherAI/"):
@@ -154,14 +167,335 @@ class ExperimentRunner:
             'max_new_tokens': self.config.get('strategies.hint.max_new_tokens', 256),
             'prompt_template': self.config.get('strategies.hint.prompt_template', None) 
         }
+        think_model_config = {
+            'max_new_tokens': self.config.get('strategies.think.max_new_tokens', 256),
+            'prompt_template': self.config.get('strategies.think.prompt_template', None)
+        }
+        solve_model_config = {  
+            'max_new_tokens': self.config.get('strategies.solve.max_new_tokens', 256),
+            'prompt_template': self.config.get('strategies.solve.prompt_template', None)
+        }
+        explain_model_config = {
+            'max_new_tokens': self.config.get('strategies.explain.max_new_tokens', 256),
+            'prompt_template': self.config.get('strategies.explain.prompt_template', None)
+        }
         self.strategies = {
             'direct': DirectStrategy(self.model, self.tokenizer, direct_model_config),
             'cot': ChainOfThoughtStrategy(self.model, self.tokenizer, cot_model_config),
             'hint': HintStrategy(self.model, self.tokenizer, hint_model_config),
+            'think': ChainOfThoughtStrategy(self.model, self.tokenizer, think_model_config),
+            'solve': ChainOfThoughtStrategy(self.model, self.tokenizer, solve_model_config),
+            'explain': ChainOfThoughtStrategy(self.model, self.tokenizer, explain_model_config)
         }
         
         print(f"Initialized {len(self.strategies)} strategies: {list(self.strategies.keys())}")
+    
+    def record_activations(
+        self,
+    ) -> None:
+        """Record model activations for given question-answer pairs.
         
+        Args:
+            qa_pairs: List of question-answer pairs
+        """
+        
+        self.load_features()
+
+        qa_pairs = self.data_loader.load_data(split=self.config.get('dataset.split', 'train'))
+        print(f"Starting experiment with {len(qa_pairs)} question-answer pairs")
+        
+        
+        for strategy_name, strategy in self.strategies.items():
+            layer_latent_acts = {}
+            if self.config.get(f'strategies.{strategy_name}.skip', False):
+                print(f"Skipping strategy: {strategy_name}")
+                continue
+            print(f"Running {strategy_name} strategy...")
+
+            for i, qa_pair in enumerate(tqdm(qa_pairs, desc=f"{strategy_name}")):
+                
+                question = qa_pair['question']
+                
+                
+                acts = strategy.get_activations(question, features=self.features, k_index=self.args.k_index, saes=self.saes)
+                # import pdb; pdb.set_trace()
+
+                for layer in self.args.steer_layers:
+                    vals = torch.cat(acts[layer])
+                    layer_latent_acts.setdefault(layer, []).append(vals)
+
+
+                if (i+1) % 50 == 0:
+                    self.save_latent_activations(strategy_name, layer_latent_acts)
+
+            self.save_latent_activations(strategy_name, layer_latent_acts)
+            ####save here#####
+
+    def record_all_activations(
+        self,
+    ) -> None:
+        
+        self.load_features()
+
+        qa_pairs = self.data_loader.load_data(split=self.config.get('dataset.split', 'train'))
+        print(f"Starting experiment with {len(qa_pairs)} question-answer pairs")
+        
+        # strategy_name = 'cot'
+        # strategy = self.strategies[strategy_name]
+        for strategy_name, strategy in self.strategies.items():
+            layer_latent_acts = {}
+            if self.config.get(f'strategies.{strategy_name}.skip', False):
+                print(f"Skipping strategy: {strategy_name}")
+                continue
+            print(f"Running {strategy_name} strategy...")
+
+            for i, qa_pair in enumerate(tqdm(qa_pairs, desc=f"{strategy_name}")):
+                
+                question = qa_pair['question']
+                
+                
+                acts = strategy.get_activations(question, features=self.features, k_index=self.args.k_index, saes=self.saes)
+
+                for layer in self.args.steer_layers:
+                    vals = torch.cat(acts[layer])
+                    layer_latent_acts.setdefault(layer, []).append(vals)
+
+
+                if (i+1) % 50 == 0:
+                    self.save_latent_activations_all(strategy_name, layer_latent_acts)
+
+            self.save_latent_activations_all(strategy_name, layer_latent_acts)
+
+    def save_latent_activations_all(self,strategy_name, layer_latent_acts):
+        for layer, acts in layer_latent_acts.items(): 
+            # for i, act in enumerate(acts):
+            #     acts[i] = acts[i][:self.args.max_activation_length]
+
+            layer_dir = self.output_dir / "latent_acts_full" / self.config.get('dataset.name') / layer
+            layer_dir.mkdir(parents=True, exist_ok=True)
+            if self.args.type_of_analysis:
+                filename = f"{strategy_name}_latent_acts_{self.args.type_of_analysis}_{self.config.get('dataset.max_samples')}.pkl"
+            else:
+                filename = f"{strategy_name}_latent_acts_tokenpos{self.args.token_pos}_{self.config.get('dataset.max_samples')}.pkl"
+            filepath = layer_dir / filename
+            with open(filepath, 'wb') as f:
+                pickle.dump(acts, f)
+            print(f"Latent acts for {layer} and strategy {strategy_name} saved to {filepath}")
+        # import pdb; pdb.set_trace()
+
+    def load_latent_activations_all(self, strategy_name, layer):
+        layer_dir = self.output_dir / "latent_acts_full" / self.config.get('dataset.name') / layer
+        layer_dir.mkdir(parents=True, exist_ok=True)
+        if self.args.type_of_analysis:
+            filename = f"{strategy_name}_latent_acts_{self.args.type_of_analysis}_{self.config.get('dataset.max_samples')}.pkl"
+        else:
+            filename = f"{strategy_name}_latent_acts_tokenpos{self.args.token_pos}_{self.config.get('dataset.max_samples')}.pkl"
+        filepath = layer_dir / filename
+        if not filepath.exists():
+            self.record_all_activations()
+        with open(filepath, 'rb') as f:
+            acts = pickle.load(f)
+        print(f"Latent acts for {layer} and strategy {strategy_name} loaded from {filepath}")
+        return acts
+    
+    def eval_latent_activations(
+        self,
+    ):
+        acts_all_strategy = {}
+        for strategy_name, strategy in self.strategies.items():
+            if self.config.get(f'strategies.{strategy_name}.skip', False):
+                print(f"Skipping strategy: {strategy_name}")
+                continue
+            answers = self._load_strategy_answers(strategy_name)
+            # import  pdb; pdb.set_trace()
+            # steered_answers = self._load_strategy_answers(strategy_name +'_steered_'+self.args.get_index_type)
+            # steered_answers = steered_answers['results']
+            layer_acts_correct = {}
+            layer_acts_incorrect = {}
+            
+            acts_all_strategy[strategy_name] = {}
+            for layer in self.args.steer_layers:
+                layer_acts = self.load_latent_activations_all(strategy_name, layer)
+                correct_acts = []
+                incorrect_acts = []
+                for i, act in enumerate(layer_acts):
+                    layer_acts[i] = layer_acts[i][:self.args.max_activation_length]
+                    if answers[i]['correct']==True:
+                        correct_acts.append(layer_acts[i])
+                    else:
+                        incorrect_acts.append(layer_acts[i])
+                acts_all_strategy[strategy_name][layer] = layer_acts
+                layer_acts_correct[layer]=correct_acts
+                layer_acts_incorrect[layer]=incorrect_acts
+
+                correct_scores = np.array([act.max().item() for act in correct_acts])
+                incorrect_scores = np.array([act.max().item() for act in incorrect_acts])
+                print(f"Correct answers: mean max activation {correct_scores.mean()}, std {correct_scores.std()}")
+                print(f"Incorrect answers: mean max activation {incorrect_scores.mean()}, std {incorrect_scores.std()}")
+
+                scores = np.concatenate([
+                    correct_scores,
+                    incorrect_scores
+                ])
+                labels = np.concatenate([
+                    np.ones(len(correct_scores)),     # 正确 = 1
+                    np.zeros(len(incorrect_scores))   # 错误 = 0
+                ])
+                r, p = pointbiserialr(labels, scores)
+                print("point-biserial r =", r)
+                print("p-value =", p)
+                save_dict = {
+                    "mean_correct": float(correct_scores.mean()),
+                    "mean_incorrect": float(incorrect_scores.mean()),
+                    "r_pointbiserial": float(r),
+                    "p_pointbiserial": float(p),
+                    "n_correct": int(len(correct_scores)),
+                    "n_incorrect": int(len(incorrect_scores)),
+                }
+                save_dir = self.output_dir / "latent_acts_full" / self.config.get('dataset.name') / layer
+                save_dir.mkdir(parents=True, exist_ok=True)
+                save_path = save_dir / (strategy_name + "_reasoning_feature_stats.pkl")
+                with open(save_path, "wb") as f:
+                    pickle.dump(save_dict, f)
+            self.save_latent_activations_all(strategy_name + '_correct', layer_acts_correct)
+            self.save_latent_activations_all(strategy_name + '_incorrect', layer_acts_incorrect)
+        direct_acts = acts_all_strategy['direct']
+        cot_acts = acts_all_strategy['cot']
+        for layer in self.args.steer_layers:
+            direct_layer_acts = direct_acts[layer]
+            cot_layer_acts = cot_acts[layer]
+            cot_scores = np.array([act.max().item() for act in cot_layer_acts])
+            direct_scores = np.array([act.max().item() for act in direct_layer_acts])
+            print("mean cot activation:", cot_scores.mean(), "std:", cot_scores.std())
+            print("mean direct activation:", direct_scores.mean(), "std:", direct_scores.std())
+            scores = np.concatenate([
+                cot_scores,
+                direct_scores
+            ])
+            labels = np.concatenate([
+                np.ones(len(cot_scores)),     # cot = 1
+                np.zeros(len(direct_scores))   # direct = 0
+            ])
+            r, p = pointbiserialr(labels, scores)
+            print("point-biserial r between cot and direct =", r)
+            print("p-value =", p)
+            save_dict = {
+                "mean_cot": float(cot_scores.mean()),
+                "mean_direct": float(direct_scores.mean()),
+                "r_pointbiserial": float(r),
+                "p_pointbiserial": float(p),
+                "n_cot": int(len(cot_scores)),
+                "n_direct": int(len(direct_scores)),
+            }
+            save_dir = self.output_dir / "latent_acts_full" / self.config.get('dataset.name') / layer
+            save_dir.mkdir(parents=True, exist_ok=True)
+            save_path = save_dir / ("cot_vs_direct_reasoning_feature_stats.pkl")
+            with open(save_path, "wb") as f:
+                pickle.dump(save_dict, f)
+
+    def save_latent_activations(self, strategy_name, layer_latent_acts):
+        for layer, acts in layer_latent_acts.items():
+            # acts: list of 1D tensors, variable length
+
+            max_len = max(act.numel() for act in acts)
+
+            sum_act = torch.zeros(max_len, dtype=acts[0].dtype)
+            count_act = torch.zeros(max_len, dtype=torch.long)
+            sq_sum_act = torch.zeros(max_len, dtype=acts[0].dtype)
+            for act in acts:
+                L = act.numel()
+                sum_act[:L] += act
+                count_act[:L] += 1
+                sq_sum_act[:L] += act ** 2
+
+            # avoid division by zero
+            mean_act = sum_act / count_act.clamp(min=1)
+            
+            var = sq_sum_act / count_act - mean_act ** 2
+            stderr = torch.sqrt(var) / torch.sqrt(count_act )
+
+            layer_dir = self.output_dir / "latent_acts" / self.config.get('dataset.name') / layer
+            layer_dir.mkdir(parents=True, exist_ok=True)
+
+            if self.args.type_of_analysis:
+                filename = f"{strategy_name}_latent_acts_{self.args.type_of_analysis}_{self.config.get('dataset.max_samples')}.pkl"
+            else:
+                filename = f"{strategy_name}_latent_acts_tokenpos{self.args.token_pos}_{self.config.get('dataset.max_samples')}.pkl"
+
+            filepath = layer_dir / filename
+            with open(filepath, "wb") as f:
+                pickle.dump(
+                    {
+                        "mean": mean_act.cpu(),
+                        "count": count_act.cpu(),
+                        "stderr": stderr.cpu(),
+                        "var": var.cpu()
+                    },
+                    f
+                )
+
+            print(f"Latent acts for {layer} and strategy {strategy_name} saved to {filepath}")
+
+        
+    def run_baseline(
+        self,
+    ) -> Dict[str, List[Dict[str, Any]]]:
+        
+        results = {}
+        qa_pairs = self.data_loader.load_data(split=self.config.get('dataset.split', 'train'))
+        print(f"Starting experiment with {len(qa_pairs)} question-answer pairs")
+        
+        # Save questions and indices first
+        self._save_questions(qa_pairs)
+        
+        for strategy_name, strategy in self.strategies.items():
+            # import pdb; pdb.set_trace() 
+            if self.config.get(f'strategies.{strategy_name}.skip', False):
+                print(f"Skipping strategy: {strategy_name}")
+                continue
+            print(f"Running {strategy_name} strategy...")
+            strategy_results = []
+            
+            strategy_results = self._load_strategy_answers(strategy_name)
+            
+            
+            if len(strategy_results) == len(qa_pairs):
+                print(f"All results for {strategy_name} already computed, skipping...")
+                results[strategy_name] = strategy_results
+                continue
+
+            for i, qa_pair in enumerate(tqdm(qa_pairs, desc=f"{strategy_name}")):
+                if len(strategy_results) > i:
+                    continue  # Skip already computed results
+                question = qa_pair['question']
+                ground_truth = qa_pair['answer']
+                
+
+                output = strategy.execute_baseline(question, self.args.hook_layers)
+                
+
+                predicted_answer = output.metadata.get('answer', '')
+                response = output.response
+                num_generated_tokens = output.num_generated_tokens
+                predicted_answer = self.data_loader.extract_answer(predicted_answer)
+                result = {
+                    'question_idx': i,
+                    'question': question,
+                    'response': response,
+                    'num_generated_tokens': num_generated_tokens,
+                    'predicted_answer': predicted_answer,
+                    'ground_truth': ground_truth,
+                    'correct': self.data_loader.check_answer_correctness(predicted_answer, ground_truth)
+                }
+                
+                strategy_results.append(result)
+                if (i+1) % 50 == 0:
+                    self._save_strategy_answers(strategy_results, strategy_name)
+
+            results[strategy_name] = strategy_results
+            
+            self._save_strategy_answers(strategy_results, strategy_name)
+
     def extract_latent_zs(
         self,
     ) -> Dict[str, List[Dict[str, Any]]]:
@@ -296,7 +630,10 @@ class ExperimentRunner:
         qa_pairs = self.data_loader.load_data(split=self.config.get('dataset.split', 'train'))
         print(f"Starting steering experiment with {len(qa_pairs)} question-answer pairs using strategy '{target_strategy}'")
         results = []
+        # results = self._load_strategy_answers(target_strategy+"_steered_"+self.args.get_index_type)
         for i, qa_pair in enumerate(tqdm(qa_pairs, desc=f"Steering-{target_strategy}")):
+            # if len(results) > i:
+            #     continue  # Skip already computed results
             question = qa_pair['question']
             ground_truth = qa_pair['answer']
             output = strategy.steer(question = question, hook_layers_idx=self.features, k_index=self.args.k_index, saes=self.saes, alpha=self.args.steer_alpha, steer_n_steps=self.args.steer_n_steps)

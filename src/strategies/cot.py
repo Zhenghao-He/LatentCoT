@@ -108,6 +108,20 @@ class ChainOfThoughtStrategy(BaseStrategy):
             }
         )
 
+    def get_activations(self, question: str, features, k_index, **kwargs) -> StrategyOutput:
+
+        # import pdb; pdb.set_trace()
+        prompt = self.generate_prompt(question)
+        
+        acts = self.generate_to_get_activations(
+            prompt=prompt,
+            features=features,
+            k_index=k_index,
+            max_new_tokens=self.config.get('max_new_tokens'),
+            **kwargs
+        )
+
+        return acts
     
     def _parse_steps(self, response: str) -> List[str]:
         """Parse reasoning steps from CoT response.
@@ -140,17 +154,43 @@ class ChainOfThoughtStrategy(BaseStrategy):
         
         return steps
     
-    def _parse_response(self, response: str) -> str:
-        """Parse response by removing <END> and everything after it.
+    
+    def execute_baseline(self, question: str, hook_layers, **kwargs) -> StrategyOutput:
+    
         
-        Args:
-            response: Raw generated response
+        prompt = self.generate_prompt(question)
+        
+        response, num_generated_tokens = self.generate(
+            prompt=prompt,
+            max_new_tokens=self.config.get('max_new_tokens'),
+            **kwargs
+        )
+
+        # Parse response - remove <|eot_id|> and everything after it
+        parsed_response = self._parse_response(response)
+        
+        return StrategyOutput(
+            response=response,
+            num_generated_tokens=num_generated_tokens,
+            metadata={
+                'strategy': 'direct',
+                'prompt': prompt,
+                'answer': parsed_response
+            }
+        )
+    # def _parse_response(self, response: str) -> str:
+    #     """Parse response by removing <END> and everything after it.
+        
+    #     Args:
+    #         response: Raw generated response
             
-        Returns:
-            Cleaned response without <|eot_id|> token
-        """
-        if '<|eot_id|>' in response:
-            return response.split('<|eot_id|>')[0].strip()
-        if '<end_of_turn>' in response:
-            return response.split('<end_of_turn>')[0].strip()
-        return response.strip()
+    #     Returns:
+    #         Cleaned response without <|eot_id|> token
+    #     """
+    #     if '<|eot_id|>' in response:
+    #         return response.split('<|eot_id|>')[0].strip()
+    #     if '<end_of_turn>' in response:
+    #         return response.split('<end_of_turn>')[0].strip()
+    #     if '<eos>' in response:
+    #         return response.split('<eos>')[0].strip()
+    #     return response.strip()

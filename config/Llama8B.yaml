@@ -5,12 +5,16 @@ dataset:
   # data_subset: "all"  # Options: gpqa_diamond, gpqa_experts, gpqa_extended
   # name: "gpqa"
   # split: "train"
-  # max_samples: 1000  # For quick testing, increase for full experiments
+  # max_samples: 200  # For quick testing, increase for full experiments
   # data_subset: "gpqa_diamond"  # Options: gpqa_diamond, gpqa_experts, gpqa_extended
   name: "gsm8k"  # Can be extended to other datasets
   split: "test"
-  max_samples: 1000  # For quick testing, increase for full experiments
+  max_samples: 50  # For quick testing, increase for full experiments
   paths: "data/raw/grade-school-math/grade_school_math/data" # Path to GSM8K dataset
+  # name: "bbh"
+  # split: "logical_deduction_three_objects"
+  # max_samples: 200  # For quick testing, increase for full experiments
+  # paths: "data/BIG-Bench-Hard/bbh/" # Path to BBH dataset
 
 model:
   name: "meta-llama/Meta-Llama-3.1-8B-Instruct"  # Base LLM model
@@ -28,7 +32,7 @@ sae:
 strategies:
   direct:
     max_new_tokens: 512
-    skip: false
+    skip: true
     prompt_template: |
       <|begin_of_text|><|start_header_id|>system<|end_header_id|>\n\n
       You are a helpful assistant.<|eot_id|>
@@ -39,7 +43,7 @@ strategies:
 
   cot:
     max_new_tokens: 512
-    skip: false
+    skip: true
     prompt_template: |
       <|begin_of_text|><|start_header_id|>system<|end_header_id|>\n\n
       You are a logical reasoning assistant. Solve the user's question by breaking it down into logical steps.
@@ -53,6 +57,45 @@ strategies:
       Format your final response as: 'Therefore, the answer is [your answer].'<|eot_id|>
       <|start_header_id|>assistant<|end_header_id|>\n\n"  
       
+  explain:
+    max_new_tokens: 512
+    skip: false
+    prompt_template: |
+      <|begin_of_text|><|start_header_id|>system<|end_header_id|>\n\n
+      You are a helpful assistant. Explain how to solve the user's question.
+      Finally, provide the answer in the specified format.<|eot_id|>
+      <|start_header_id|>user<|end_header_id|>\n\n
+      Question: {question}\n\n
+      Explain how you get the answer.\n\n:
+      Format your final response as: 'Therefore, the answer is [your answer].'<|eot_id|>
+      <|start_header_id|>assistant<|end_header_id|>\n\n"  
+
+  solve:
+    max_new_tokens: 512
+    skip: false
+    prompt_template: |
+      <|begin_of_text|><|start_header_id|>system<|end_header_id|>\n\n
+      You are a helpful assistant. Solve the user's question carefully.
+      Finally, provide the answer in the specified format.<|eot_id|>
+      <|start_header_id|>user<|end_header_id|>\n\n
+      Question: {question}\n\n
+      Solve the problem carefully.\n\n
+      Format your final response as: 'Therefore, the answer is [your answer].'<|eot_id|>
+      <|start_header_id|>assistant<|end_header_id|>\n\n" 
+
+  think:
+    max_new_tokens: 512
+    skip: false
+    prompt_template: |
+      <|begin_of_text|><|start_header_id|>system<|end_header_id|>\n\n
+      You are a helpful assistant. Think carefully before answering.
+      Finally, provide the answer in the specified format.<|eot_id|>
+      <|start_header_id|>user<|end_header_id|>\n\n
+      Question: {question}\n\n
+      Think carefully before answering.\n\n
+      Format your final response as: 'Therefore, the answer is [your answer].'<|eot_id|>
+      <|start_header_id|>assistant<|end_header_id|>\n\n"   
+
   hint:
     max_new_tokens: 512
     skip: true

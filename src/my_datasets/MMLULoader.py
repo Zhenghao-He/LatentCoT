@@ -22,7 +22,7 @@ class MMLULoader(DataLoader):
         ds = load_dataset("cais/mmlu", "all")
         num_subjects = len(ds[split].unique('subject'))
         uniform_test = self.sample_uniform_per_subject(ds[split], n_per_subject=self.max_samples // num_subjects + 1)
-
+        import pdb; pdb.set_trace()
         qa_pairs = []
         for ex in uniform_test:
             q = ex["question"]
@@ -116,5 +116,5 @@ class MMLULoader(DataLoader):
 
 if __name__ == "__main__":
     loader = MMLULoader(base_path="", max_samples=1000)
-    data = loader.load_data(split='train')
+    data = loader.load_data(split='test')
     import pdb; pdb.set_trace()

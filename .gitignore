@@ -1,7 +1,7 @@
 # ---- Project-specific ignores ----
 data/
 results/
-
+visual/
 # ---- Python caches ----
 __pycache__/
 */__pycache__/
@@ -22,6 +22,7 @@ Thumbs.db
 
 # ---- VSCode ----
 .vscode/
+
 
 # ---- Python packaging ----
 *.egg-info/

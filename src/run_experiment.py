@@ -7,6 +7,7 @@ from my_datasets.dataset_loader import DataLoader
 from my_datasets.GSM8KLoader import GSM8KLoader
 from my_datasets.GPQALoader import GPQALoader
 from my_datasets.MMLULoader import MMLULoader
+from my_datasets.BBHLoader import BBHLoader
 # run_experiment.py 顶部，第一屏代码
 import torch
 # torch._dynamo.disable()
@@ -25,6 +26,12 @@ def main():
         default='config/default.yaml',
         help='Path to configuration file'
     )
+    parser.add_argument(
+        '--multi_gpu',
+        action='store_true',
+        help='Flag to enable multi-GPU training'
+    )
+
     parser.add_argument(
         '--device',
         type=str,
@@ -81,6 +88,12 @@ def main():
         default=1,
         help='Number of steps to apply steering'
     )
+    parser.add_argument(
+        '--max_activation_length',
+        type=int,
+        default=None,
+        help='Maximum length of activations to consider'
+    )
 
     analysis_group = parser.add_mutually_exclusive_group(required=True)
     analysis_group.add_argument(
@@ -115,6 +128,26 @@ def main():
         action='store_true',
         help='Flag to run the full experiment'
     )
+    run_group.add_argument(
+        '--run_baseline',
+        action='store_true',
+        help='Flag to run baseline experiments'
+    )
+    run_group.add_argument(
+        '--record_activations',
+        action='store_true',
+        help='Flag to record model activations'
+    )
+    run_group.add_argument(
+        '--eval_features',
+        action='store_true',
+        help='Flag to evaluate features'
+    )
+    run_group.add_argument(
+        '--get_acts_for_each_sample',
+        action='store_true',
+        help='Flag to get activations for each sample individually'
+    ) # max acts per sample
 
     args = parser.parse_args()
     
@@ -138,6 +171,11 @@ def main():
                 base_path=config.get('dataset.paths', ''),
                 max_samples=config.get('dataset.max_samples', None),
                 data_subset=config.get('dataset.data_subset', 'all')
+            )
+        elif dt_name == 'bbh':
+            dt_loader = BBHLoader(
+                base_path=config.get('dataset.paths', ''),
+                max_samples=config.get('dataset.max_samples', None)
             )
         else:
             dt_loader = DataLoader(
@@ -175,16 +213,150 @@ def main():
                 max_samples=config.get('dataset.max_samples', None),
                 data_subset=config.get('dataset.data_subset', 'all')
             )
+        elif dt_name == 'bbh':
+            dt_loader = BBHLoader(
+                base_path=config.get('dataset.paths', ''),
+                max_samples=config.get('dataset.max_samples', None)
+            )
+        else:
+            dt_loader = DataLoader(
+                base_path=config.get('dataset.paths', ''),
+                max_samples=config.get('dataset.max_samples', None)
+            )
+
+        runner = ExperimentRunner(args.config, args=args, data_loader=dt_loader)
+        runner.run_steering_experiment()
+        print("Steering experiment completed")
+    elif args.run_baseline:
+        dt_name = config.get('dataset.name', '')
+        if dt_name == 'gsm8k':
+            dt_loader = GSM8KLoader(
+                base_path=config.get('dataset.paths', ''),
+                max_samples=config.get('dataset.max_samples', None)
+            )
+        elif dt_name == 'gpqa':
+            dt_loader = GPQALoader(
+                base_path=config.get('dataset.paths', ''),
+                data_subset=config.get('dataset.data_subset', 'gpqa_diamond'),
+                max_samples=config.get('dataset.max_samples', None)
+            )
+        elif dt_name == 'mmlu':
+            dt_loader = MMLULoader(
+                base_path=config.get('dataset.paths', ''),
+                max_samples=config.get('dataset.max_samples', None),
+                data_subset=config.get('dataset.data_subset', 'all')
+            )
+        elif dt_name == 'bbh':
+            dt_loader = BBHLoader(
+                base_path=config.get('dataset.paths', ''),
+                max_samples=config.get('dataset.max_samples', None)
+            )
         else:
             dt_loader = DataLoader(
                 base_path=config.get('dataset.paths', ''),
                 max_samples=config.get('dataset.max_samples', None)
             )
         runner = ExperimentRunner(args.config, args=args, data_loader=dt_loader)
-        runner.run_steering_experiment()
-        print("Steering experiment completed")
-
-        
+        runner.run_baseline()
+        print("Baseline experiment completed")
+    elif args.record_activations:
+        dt_name = config.get('dataset.name', '')
+        if dt_name == 'gsm8k':
+            dt_loader = GSM8KLoader(
+                base_path=config.get('dataset.paths', ''),
+                max_samples=config.get('dataset.max_samples', None)
+            )
+        elif dt_name == 'gpqa':
+            dt_loader = GPQALoader(
+                base_path=config.get('dataset.paths', ''),
+                data_subset=config.get('dataset.data_subset', 'gpqa_diamond'),
+                max_samples=config.get('dataset.max_samples', None)
+            )
+        elif dt_name == 'mmlu':
+            dt_loader = MMLULoader(
+                base_path=config.get('dataset.paths', ''),
+                max_samples=config.get('dataset.max_samples', None),
+                data_subset=config.get('dataset.data_subset', 'all')
+            )
+        elif dt_name == 'bbh':
+            dt_loader = BBHLoader(
+                base_path=config.get('dataset.paths', ''),
+                max_samples=config.get('dataset.max_samples', None)
+            )
+        else:
+            dt_loader = DataLoader(
+                base_path=config.get('dataset.paths', ''),
+                max_samples=config.get('dataset.max_samples', None)
+            )
+        runner = ExperimentRunner(args.config, args=args, data_loader=dt_loader)
+        runner.record_activations()
+        print("Activation recording completed")
+    elif args.eval_features:
+        dt_name = config.get('dataset.name', '')
+        if dt_name == 'gsm8k':
+            dt_loader = GSM8KLoader(
+                base_path=config.get('dataset.paths', ''),
+                max_samples=config.get('dataset.max_samples', None)
+            )
+        elif dt_name == 'gpqa':
+            dt_loader = GPQALoader(
+                base_path=config.get('dataset.paths', ''),
+                data_subset=config.get('dataset.data_subset', 'gpqa_diamond'),
+                max_samples=config.get('dataset.max_samples', None)
+            )
+        elif dt_name == 'mmlu':
+            dt_loader = MMLULoader(
+                base_path=config.get('dataset.paths', ''),
+                max_samples=config.get('dataset.max_samples', None),
+                data_subset=config.get('dataset.data_subset', 'all')
+            )
+        elif dt_name == 'bbh':
+            dt_loader = BBHLoader(
+                base_path=config.get('dataset.paths', ''),
+                max_samples=config.get('dataset.max_samples', None)
+            )
+        else:
+            dt_loader = DataLoader(
+                base_path=config.get('dataset.paths', ''),
+                max_samples=config.get('dataset.max_samples', None)
+            )
+        runner = ExperimentRunner(args.config, args=args, data_loader=dt_loader)
+        runner.eval_latent_activations()
+        print("Feature evaluation completed")
+    elif args.get_acts_for_each_sample:
+        dt_name = config.get('dataset.name', '')
+        if dt_name == 'gsm8k':
+            dt_loader = GSM8KLoader(
+                base_path=config.get('dataset.paths', ''),
+                max_samples=config.get('dataset.max_samples', None)
+            )
+        elif dt_name == 'gpqa':
+            dt_loader = GPQALoader(
+                base_path=config.get('dataset.paths', ''),
+                data_subset=config.get('dataset.data_subset', 'gpqa_diamond'),
+                max_samples=config.get('dataset.max_samples', None)
+            )
+        elif dt_name == 'mmlu':
+            dt_loader = MMLULoader(
+                base_path=config.get('dataset.paths', ''),
+                max_samples=config.get('dataset.max_samples', None),
+                data_subset=config.get('dataset.data_subset', 'all')
+            )
+        elif dt_name == 'bbh':
+            dt_loader = BBHLoader(
+                base_path=config.get('dataset.paths', ''),
+                max_samples=config.get('dataset.max_samples', None)
+            )
+        else:
+            dt_loader = DataLoader(
+                base_path=config.get('dataset.paths', ''),
+                max_samples=config.get('dataset.max_samples', None)
+            )
+        runner = ExperimentRunner(args.config, args=args, data_loader=dt_loader)
+        runner.record_all_activations()
+        print("Get activations for each sample completed")
+    else:
+        raise ValueError("No valid run option selected.")
 
 
     
