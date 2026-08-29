@@ -84,7 +84,7 @@ class ChainOfThoughtStrategy(BaseStrategy):
         
         # Generate response (we still need the response but not its hidden states)
         # 
-        response, num_generated_tokens = self.generate_anti_steered_response(
+        response, num_generated_tokens = self.generate_steered_response(
             prompt=prompt,
             hook_layers_idx=hook_layers_idx,
             k_index=k_index,
