@@ -1,6 +1,6 @@
 import matplotlib.pyplot as plt
 import numpy as np
-fig, axes = plt.subplots(2, 1, figsize=(6, 7), sharex=True)
+fig, axes = plt.subplots(1, 2, figsize=(16, 7), sharex=True)
 
 steps = [1, 2, 3, 4, 5, 6]
 steps_np = np.array(steps)
@@ -18,13 +18,14 @@ acc_direct = 24.8
 tok_direct_mean = 17
 
 
-LEGEND_FONT_SIZE = 14
-LABEL_FONT_SIZE = 16
-TICK_FONT_SIZE = 14 
+LEGEND_FONT_SIZE = 24
+LABEL_FONT_SIZE = 26
+TICK_FONT_SIZE = 20 
 
 # 上：accuracy
 axes[0].plot(steps, acc_top1_mean, marker='o', linewidth=2, label='Top-1')
 axes[0].plot(steps, acc_top10_mean, marker='s', linewidth=2, label='Top-10')
+axes[0].set_xlabel('Steering step', fontsize=LABEL_FONT_SIZE)
 axes[0].set_ylabel('Accuracy (%)', fontsize=LABEL_FONT_SIZE)
 axes[0].grid(True, linestyle='--', alpha=0.3)
 
@@ -39,12 +40,12 @@ axes[0].tick_params(axis='x', labelsize=TICK_FONT_SIZE)
 axes[0].tick_params(axis='y', labelsize=TICK_FONT_SIZE)
 
 # 下：token
-axes[1].plot(steps, tok_top1_mean, marker='o', linewidth=2)
+axes[1].plot(steps, tok_top1_mean, marker='o', linewidth=2, label='Top-1')
 axes[1].fill_between(steps_np,
                      np.array(tok_top1_mean)-np.array(tok_top1_std),
                      np.array(tok_top1_mean)+np.array(tok_top1_std),
                      alpha=0.25)
-axes[1].plot(steps, tok_top10_mean, marker='s', linewidth=2)
+axes[1].plot(steps, tok_top10_mean, marker='s', linewidth=2, label='Top-10')
 axes[1].fill_between(steps_np,
                      np.array(tok_top10_mean)-np.array(tok_top10_std),
                      np.array(tok_top10_mean)+np.array(tok_top10_std),
@@ -61,8 +62,10 @@ axes[1].axhline(
     label='Direct (no steering)',
 )
 axes[0].legend(frameon=True, fontsize=LEGEND_FONT_SIZE)
+
 axes[1].tick_params(axis='x', labelsize=TICK_FONT_SIZE)
 axes[1].tick_params(axis='y', labelsize=TICK_FONT_SIZE)
+axes[1].legend(frameon=True, fontsize=LEGEND_FONT_SIZE)
 plt.tight_layout()
 # plt.show()
 plt.savefig('steer_step_analysis.pdf')

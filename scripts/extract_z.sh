@@ -1,7 +1,21 @@
 #!/bin/bash
 # 提取激活值
-
+export PYTHONNOUSERSITE=1
 # cd src
+# python src/run_experiment.py \
+#         --extract_latent_zs \
+#         --config config/Llama8B.yaml \
+#         --hook_layers layers.19 \
+#         --device cuda:4 \
+#         --token_pos 1 \
+
+python src/run_experiment.py \
+        --extract_latent_zs \
+        --config config/Llama8B_R1_distill.yaml \
+        --hook_layers layers.19 \
+        --device cuda:0 \
+        --token_pos 1 \
+
 # python src/run_experiment.py \
 #         --extract_latent_zs \
 #         --config config/Qwen0.6B.yaml \
@@ -23,12 +37,12 @@
 #         --device cuda:1 \
 #         --token_pos 1 \
 
-python src/run_experiment.py \
-        --extract_latent_zs \
-        --config config/Gemma12B.yaml \
-        --hook_layers layers.41\
-        --device cuda:6 \
-        --token_pos 1 \
+# python src/run_experiment.py \
+#         --extract_latent_zs \
+#         --config config/Gemma12B.yaml \
+#         --hook_layers layers.41\
+#         --device cuda:6 \
+#         --token_pos 1 \
 
 
 # python src/run_experiment.py \

@@ -5,7 +5,7 @@ python src/run_experiment.py \
         --run_analysis \
         --config config/Llama8B.yaml \
         --hook_layers layers.19 \
-        --topk 1000 \
+        --topk 25 \
         --device cuda:0 \
         --get_index_type Reason \
         --token_pos 1
@@ -14,7 +14,7 @@ python src/run_experiment.py \
 #         --run_analysis \
 #         --config config/Qwen4B.yaml \
 #         --hook_layers layers.17 layers.19 layers.23 layers.25 layers.27 layers.29 layers.31 layers.33 \
-#         --topk 25 \
+#         --topk 2000 \
 #         --device cuda:1 \
 #         --get_index_type Reason \
 #         --token_pos 1

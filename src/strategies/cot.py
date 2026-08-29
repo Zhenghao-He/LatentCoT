@@ -84,7 +84,7 @@ class ChainOfThoughtStrategy(BaseStrategy):
         
         # Generate response (we still need the response but not its hidden states)
         # 
-        response, num_generated_tokens = self.generate_steered_response(
+        response, num_generated_tokens = self.generate_anti_steered_response(
             prompt=prompt,
             hook_layers_idx=hook_layers_idx,
             k_index=k_index,
@@ -102,11 +102,42 @@ class ChainOfThoughtStrategy(BaseStrategy):
             response=response,
             num_generated_tokens=num_generated_tokens,
             metadata={
-                'strategy': 'direct',
+                'strategy': 'cot',
                 'prompt': prompt,
                 'answer': parsed_response
             }
         )
+
+    def dense_steer(self, question, alpha, hook_layers,direction, **kwargs):
+        prompt = self.generate_prompt(question)
+        
+        # Get prompt hidden states (what we actually want for analysis)
+        # prompt_hidden_states = self.get_prompt_hidden_states(prompt)
+        
+        # Generate response (we still need the response but not its hidden states)
+        # 
+        response, num_generated_tokens = self.generate_dense_steered_response(
+            prompt=prompt,
+            hook_layers=hook_layers,
+            direction=direction,
+            max_new_tokens=self.config.get('max_new_tokens'),
+            alpha=alpha,
+            **kwargs
+        )
+
+        # Parse response - remove <END> and everything after it
+        # steps = self._parse_steps(response)
+        parsed_response = self._parse_response(response)
+        return StrategyOutput(
+            response=response,
+            num_generated_tokens=num_generated_tokens,
+            metadata={
+                'strategy': 'cot',
+                'prompt': prompt,
+                'answer': parsed_response
+            }
+        )
+
 
     def get_activations(self, question: str, features, k_index, **kwargs) -> StrategyOutput:
 
@@ -117,6 +148,19 @@ class ChainOfThoughtStrategy(BaseStrategy):
             prompt=prompt,
             features=features,
             k_index=k_index,
+            max_new_tokens=self.config.get('max_new_tokens'),
+            **kwargs
+        )
+
+        return acts
+
+    def get_raw_acts(self, question: str, hook_layers, **kwargs):
+
+        prompt = self.generate_prompt(question)
+        
+        acts = self.generate_to_get_raw_activations(
+            prompt=prompt,
+            hook_layers=hook_layers,
             max_new_tokens=self.config.get('max_new_tokens'),
             **kwargs
         )

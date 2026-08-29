@@ -12,18 +12,17 @@
 #         --steer_n_steps 1 \
 #         --steer_alpha 20
 
-python src/run_experiment.py \
-        --steering \
-        --config config/Llama8B.yaml \
-        --steer_layers layers.19\
-        --topk 10 \
-        --k_index 3 \
-        --device cuda:0 \
-        --get_index_type Reason \
-        --steering_target_strategy direct \
-        --token_pos 1 \
-        --steer_n_steps 1 \
-        --steer_alpha 0
+# python src/run_experiment.py \
+#         --steering \
+#         --config config/Llama8B.yaml \
+#         --steer_layers layers.19\
+#         --topk 10 \
+#         --device cuda:0 \
+#         --get_index_type Reason \
+#         --steering_target_strategy direct \
+#         --token_pos 1 \
+#         --steer_n_steps 1 \
+#         --steer_alpha 15
 
 # python src/run_experiment.py \
 #         --steering \
@@ -37,17 +36,17 @@ python src/run_experiment.py \
 #         --steer_n_steps -1 \
 #         --steer_alpha 25.0
 
-# python src/run_experiment.py \
-#         --steering \
-#         --config config/Qwen4B.yaml \
-#         --steer_layers layers.29\
-#         --topk 25 \
-#         --device cuda:5 \
-#         --get_index_type Reason \
-#         --steering_target_strategy direct \
-#         --token_pos 1 \
-#         --steer_n_steps 10 \
-#         --steer_alpha 50.0
+python src/run_experiment.py \
+        --steering \
+        --config config/Qwen4B.yaml \
+        --steer_layers layers.29\
+        --topk 25 \
+        --device cuda:0 \
+        --get_index_type Reason \
+        --steering_target_strategy cot \
+        --token_pos 1 \
+        --steer_n_steps -1 \
+        --steer_alpha 50.0
 
 
 

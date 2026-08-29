@@ -1,18 +1,19 @@
 #!/bin/bash
-# 提取的是生成token的sae指定纬度的激活，用来分析指定纬度的激活随着step的变化
-
-python src/run_experiment.py \
-        --record_activations \
-        --config config/Llama8B.yaml \
-        --steer_layers layers.19\
-        --device cuda:4 \
-        --token_pos 1 \
-        --k_index 3 \
-        --topk 10 \
-        --get_index_type Reason 
+# 提取激活值
 
 # python src/run_experiment.py \
-#         --record_activations \
+#         --construct_dense_direction \
+#         --config config/Llama8B.yaml \
+#         --hook_layers layers.19\
+#         --device cuda:0 \
+#         --token_pos 1 \
+#         --k_index 3 \
+#         --topk 10 \
+#         --max_activation_length 5 \
+#         --get_index_type Reason 
+
+# python src/run_experiment.py \
+#         --eval_features \
 #         --config config/Llama70B.yaml \
 #         --steer_layers layers.50\
 #         --multi_gpu \
@@ -20,6 +21,7 @@ python src/run_experiment.py \
 #         --token_pos 1 \
 #         --k_index 3 \
 #         --topk 10 \
+#         --max_activation_length 30 \
 #         --get_index_type Reason 
 
 
@@ -45,6 +47,29 @@ python src/run_experiment.py \
 #         --hook_layers layers.9 layers.17 layers.22 layers.29\
 #         --device cuda:1 \
 #         --token_pos 1 \
+
+python src/run_experiment.py \
+        --construct_dense_direction \
+        --config config/Gemma4B.yaml \
+        --hook_layers layers.29\
+        --device cuda:0 \
+        --token_pos 1 \
+        --k_index 3 \
+        --topk 10 \
+        --max_activation_length 5 \
+        --get_index_type Reason 
+
+# python src/run_experiment.py \
+#         --construct_dense_direction \
+#         --config config/Qwen4B.yaml \
+#         --hook_layers layers.29\
+#         --device cuda:1 \
+#         --token_pos 1 \
+#         --k_index 3 \
+#         --topk 10 \
+#         --max_activation_length 5 \
+#         --get_index_type Reason 
+
 
 # python src/run_experiment.py \
 #         --extract_latent_zs \

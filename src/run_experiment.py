@@ -8,6 +8,8 @@ from my_datasets.GSM8KLoader import GSM8KLoader
 from my_datasets.GPQALoader import GPQALoader
 from my_datasets.MMLULoader import MMLULoader
 from my_datasets.BBHLoader import BBHLoader
+from my_datasets.MATHLoader import MATHLoader
+from my_datasets.MATH500Loader import MATH500Loader
 # run_experiment.py 顶部，第一屏代码
 import torch
 # torch._dynamo.disable()
@@ -124,6 +126,11 @@ def main():
         help='Flag to run steering experiment'
     )
     run_group.add_argument(
+        '--dense_steering',
+        action='store_true',
+        help='Flag to run steering experiment'
+    )
+    run_group.add_argument(
         '--run_experiment',
         action='store_true',
         help='Flag to run the full experiment'
@@ -142,6 +149,11 @@ def main():
         '--eval_features',
         action='store_true',
         help='Flag to evaluate features'
+    )
+    run_group.add_argument(
+        '--construct_dense_direction',
+        action='store_true',
+        help='Flag to extract raw activations without any pooling or analysis'
     )
     run_group.add_argument(
         '--get_acts_for_each_sample',
@@ -227,6 +239,40 @@ def main():
         runner = ExperimentRunner(args.config, args=args, data_loader=dt_loader)
         runner.run_steering_experiment()
         print("Steering experiment completed")
+
+    elif args.dense_steering:
+        dt_name = config.get('dataset.name', '')
+        if dt_name == 'gsm8k':
+            dt_loader = GSM8KLoader(
+                base_path=config.get('dataset.paths', ''),
+                max_samples=config.get('dataset.max_samples', None)
+            )
+        elif dt_name == 'gpqa':
+            dt_loader = GPQALoader(
+                base_path=config.get('dataset.paths', ''),
+                data_subset=config.get('dataset.data_subset', 'gpqa_diamond'),
+                max_samples=config.get('dataset.max_samples', None)
+            )
+        elif dt_name == 'mmlu':
+            dt_loader = MMLULoader(
+                base_path=config.get('dataset.paths', ''),
+                max_samples=config.get('dataset.max_samples', None),
+                data_subset=config.get('dataset.data_subset', 'all')
+            )
+        elif dt_name == 'bbh':
+            dt_loader = BBHLoader(
+                base_path=config.get('dataset.paths', ''),
+                max_samples=config.get('dataset.max_samples', None)
+            )
+        else:
+            dt_loader = DataLoader(
+                base_path=config.get('dataset.paths', ''),
+                max_samples=config.get('dataset.max_samples', None)
+            )
+
+        runner = ExperimentRunner(args.config, args=args, data_loader=dt_loader)
+        runner.run_dense_steering_experiment()
+        print("Steering experiment completed")
     elif args.run_baseline:
         dt_name = config.get('dataset.name', '')
         if dt_name == 'gsm8k':
@@ -250,6 +296,28 @@ def main():
             dt_loader = BBHLoader(
                 base_path=config.get('dataset.paths', ''),
                 max_samples=config.get('dataset.max_samples', None)
+            )    
+        elif dt_name == 'math':
+            dt_loader = MATHLoader(
+                base_path=config.get('dataset.paths', ''),
+                max_samples=config.get('dataset.max_samples', None),
+                data_subset=config.get('dataset.data_subset', 'math'),
+                balance_by_level=config.get('dataset.balance_by_level', False),
+                samples_per_level=config.get('dataset.samples_per_level', None),
+                fill_shortfall_to_max=config.get('dataset.fill_shortfall_to_max', False),
+                random_seed=config.get('experiment.random_seed', 42),
+                allowed_levels=config.get('dataset.allowed_levels', None),
+            )
+        elif dt_name == 'math500':
+            dt_loader = MATH500Loader(
+                base_path=config.get('dataset.paths', ''),
+                max_samples=config.get('dataset.max_samples', None),
+                data_subset=config.get('dataset.data_subset', 'math500'),
+                balance_by_level=config.get('dataset.balance_by_level', False),
+                samples_per_level=config.get('dataset.samples_per_level', None),
+                fill_shortfall_to_max=config.get('dataset.fill_shortfall_to_max', False),
+                random_seed=config.get('experiment.random_seed', 42),
+                allowed_levels=config.get('dataset.allowed_levels', None),
             )
         else:
             dt_loader = DataLoader(
@@ -355,6 +423,39 @@ def main():
         runner = ExperimentRunner(args.config, args=args, data_loader=dt_loader)
         runner.record_all_activations()
         print("Get activations for each sample completed")
+
+    elif args.construct_dense_direction:
+        dt_name = config.get('dataset.name', '')
+        if dt_name == 'gsm8k':
+            dt_loader = GSM8KLoader(
+                base_path=config.get('dataset.paths', ''),
+                max_samples=config.get('dataset.max_samples', None)
+            )
+        elif dt_name == 'gpqa':
+            dt_loader = GPQALoader(
+                base_path=config.get('dataset.paths', ''),
+                data_subset=config.get('dataset.data_subset', 'gpqa_diamond'),
+                max_samples=config.get('dataset.max_samples', None)
+            )
+        elif dt_name == 'mmlu':
+            dt_loader = MMLULoader(
+                base_path=config.get('dataset.paths', ''),
+                max_samples=config.get('dataset.max_samples', None),
+                data_subset=config.get('dataset.data_subset', 'all')
+            )
+        elif dt_name == 'bbh':
+            dt_loader = BBHLoader(
+                base_path=config.get('dataset.paths', ''),
+                max_samples=config.get('dataset.max_samples', None)
+            )
+        else:
+            dt_loader = DataLoader(
+                base_path=config.get('dataset.paths', ''),
+                max_samples=config.get('dataset.max_samples', None)
+            )
+        runner = ExperimentRunner(args.config, args=args, data_loader=dt_loader)
+        runner.construct_dense_direction()
+        print("Get raw activations for each sample completed")
     else:
         raise ValueError("No valid run option selected.")
 

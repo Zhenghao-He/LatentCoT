@@ -26,3 +26,8 @@ Thumbs.db
 
 # ---- Python packaging ----
 *.egg-info/
+
+*.pdf
+.codex
+results
+

@@ -4,58 +4,70 @@ dataset:
   # max_samples: 57  # For quick testing, increase for full experiments
   # data_subset: "all"  # Options: gpqa_diamond, gpqa_experts, gpqa_extended
   # name: "gpqa"
-  # split: "train"
-  # max_samples: 200  # For quick testing, increase for full experiments
+  # split: "gpqa_diamond"
+  # max_samples: 1000  # For quick testing, increase for full experiments
   # data_subset: "gpqa_diamond"  # Options: gpqa_diamond, gpqa_experts, gpqa_extended
-  name: "gsm8k"  # Can be extended to other datasets
-  split: "test"
+  # name: "gsm8k"  # Can be extended to other datasets
+  # split: "test"
+  # max_samples: 500  # For quick testing, increase for full experiments
+  # paths: "/p/realai/zhenghao/Hint_And_Reason/data/raw/grade-school-math/grade_school_math/data" # Path to GSM8K dataset
+  name: "bbh"
+  split: "logical_deduction_three_objects"
   max_samples: 1000  # For quick testing, increase for full experiments
-  paths: "data/raw/grade-school-math/grade_school_math/data" # Path to GSM8K dataset
-  # name: "bbh"
-  # split: "logical_deduction_three_objects"
-  # max_samples: 200  # For quick testing, increase for full experiments
-  # paths: "data/BIG-Bench-Hard/bbh/" # Path to BBH dataset
+  paths: "/p/realai/zhenghao/Hint_And_Reason/data/BIG-Bench-Hard/bbh/" # Path to BBH dataset
+  # name: "math500"
+  # split: "test"
+  # max_samples: 500
+  # paths: ""
+  # data_subset: "math500"
+  # name: "math500"
+  # split: "test"
+  # max_samples: 500
+  # paths: ""
+  # data_subset: "math500"
 
 model:
-  name: "meta-llama/Meta-Llama-3.1-8B-Instruct"  # Base LLM model
+  name: "deepseek-ai/DeepSeek-R1-Distill-Llama-8B"  # Base LLM model
   # name: "meta-llama/Llama-3.3-70B-Instruct"  # Base LLM model
   # name: "meta-llama/Meta-Llama-3-8B-Instruct"  # Base LLM model
   # name: "Qwen/Qwen3-0.6B"
   # name:
 
 sae:
-  model_name: "Goodfire/Llama-3.1-8B-Instruct-SAE-l19"
-  # model_name: "/p/realai/guangzhi/sae-faithful-rag/checkpoints/sae-qwen3-0.6bx32_16/unnamed"
-  # model_name: "Goodfire/Llama-3.3-70B-Instruct-SAE-l50"
-  # model_name: "EleutherAI/sae-llama-3-8b-32x"
+  model_name: "andreuka18/sae-deepseek-r1-llama-8b"
+
 
 strategies:
   direct:
-    max_new_tokens: 512
+    max_new_tokens: 2048
     skip: false
     prompt_template: |
-      <|begin_of_text|><|start_header_id|>system<|end_header_id|>\n\n
-      You are a helpful assistant.<|eot_id|>
-      <|start_header_id|>user<|end_header_id|>\n\n
-      Question: {question}\n\n
-      Give me the answer directly without explanations.<|eot_id|>
-      <|start_header_id|>assistant<|end_header_id|>\n\n
+      <|begin▁of▁sentence|><|User|>
+      Answer the question directly.
+
+      Rules:
+      - Return exactly one line.
+      - Do not explain.
+      - Do not include analysis.
+      - Do not include intermediate steps.
+      - Use exactly this format:
+
+      Question: {question}<|end|><think>\n\n</think>\n\n
+      <|Assistant|>Therefore, the answer is <|Answer|>
 
   cot:
-    max_new_tokens: 512
+    max_new_tokens: 2048
     skip: false
     prompt_template: |
-      <|begin_of_text|><|start_header_id|>system<|end_header_id|>\n\n
+      <|begin▁of▁sentence|>
       You are a logical reasoning assistant. Solve the user's question by breaking it down into logical steps.
-      Finally, provide the answer in the specified format.<|eot_id|>
-      <|start_header_id|>user<|end_header_id|>\n\n
-      Question: {question}\n\n
-      Let's think step by step:\n
-      1) Analyze the given information.\n
-      2) Deduce intermediate conclusions.\n
-      3) Finalize the answer.\n\n
-      Format your final response as: 'Therefore, the answer is [your answer].'<|eot_id|>
-      <|start_header_id|>assistant<|end_header_id|>\n\n"  
+      Finally, provide the answer in the specified format.
+      <|User|>
+      Question: {question}
+
+      Please think step by step, and at the end output:
+      Therefore, the answer is [your answer].
+      <|Assistant|><think>
       
   explain:
     max_new_tokens: 512
@@ -68,7 +80,7 @@ strategies:
       Question: {question}\n\n
       Explain how you get the answer.\n\n:
       Format your final response as: 'Therefore, the answer is [your answer].'<|eot_id|>
-      <|start_header_id|>assistant<|end_header_id|>\n\n"  
+      <|start_header_id|>assistant<|end_header_id|>\n\n
 
   solve:
     max_new_tokens: 512
@@ -81,7 +93,7 @@ strategies:
       Question: {question}\n\n
       Solve the problem carefully.\n\n
       Format your final response as: 'Therefore, the answer is [your answer].'<|eot_id|>
-      <|start_header_id|>assistant<|end_header_id|>\n\n" 
+      <|start_header_id|>assistant<|end_header_id|>\n\n
 
   think:
     max_new_tokens: 512
@@ -94,20 +106,7 @@ strategies:
       Question: {question}\n\n
       Think carefully before answering.\n\n
       Format your final response as: 'Therefore, the answer is [your answer].'<|eot_id|>
-      <|start_header_id|>assistant<|end_header_id|>\n\n"   
-
-  pseudo_reason:
-    max_new_tokens: 512
-    skip: true
-    prompt_template: |
-      <|begin_of_text|><|start_header_id|>system<|end_header_id|>\n\n
-      Provide a detailed restatement of the problem in a step-by-step format. 
-      Use expressions such as “First,” “Next,” and “Therefore,” 
-      but do not perform any calculations or intermediate reasoning. 
-      After the restatement, give the final answer directly. <|eot_id|>
-      <|start_header_id|>user<|end_header_id|>\n\n
-      Question: {question}\n\n'<|eot_id|>
-      <|start_header_id|>assistant<|end_header_id|>\n\n"   
+      <|start_header_id|>assistant<|end_header_id|>\n\n
 
   hint:
     max_new_tokens: 512
@@ -116,7 +115,7 @@ strategies:
   cot_hint:
     max_new_tokens: 256
     skip: true
-
+  
   pesudo_reason:
     max_new_tokens: 512
     skip: true
@@ -126,4 +125,6 @@ strategies:
 
 experiment:
   output_dir: "./results"
+  big_temp_dir: "/bigtemp2/wff7ad"
+  big_temp_dir2: "/bigtemp2/wff7ad"
   random_seed: 42

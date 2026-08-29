@@ -5,7 +5,7 @@ python src/run_experiment.py \
         --get_acts_for_each_sample \
         --config config/Llama8B.yaml \
         --steer_layers layers.19\
-        --device cuda:4 \
+        --device cuda:0 \
         --token_pos 1 \
         --k_index 3 \
         --topk 10 \
