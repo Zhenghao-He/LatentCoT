@@ -12,7 +12,9 @@ Only the two datasets used by the reproduction scripts are supported.
 from __future__ import annotations
 
 import argparse
+import csv
 import json
+import random
 import re
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
@@ -93,11 +95,45 @@ def load_bbh(limit: int | None) -> list[dict[str, str]]:
     return rows[:limit] if limit is not None else rows
 
 
+def load_gpqa(limit: int | None) -> list[dict[str, str]]:
+    path = REPO_ROOT / "data/gpqa/gpqa_diamond.csv"
+    rng = random.Random(42)
+    rows: list[dict[str, str]] = []
+    with path.open(encoding="utf-8", newline="") as handle:
+        for item in csv.DictReader(handle):
+            choices = [
+                (str(item["Pre-Revision Correct Answer"]), True),
+                (str(item["Pre-Revision Incorrect Answer 1"]), False),
+                (str(item["Pre-Revision Incorrect Answer 2"]), False),
+                (str(item["Pre-Revision Incorrect Answer 3"]), False),
+            ]
+            rng.shuffle(choices)
+            letters = "ABCD"
+            answer = next(
+                letters[index]
+                for index, (_, is_answer) in enumerate(choices)
+                if is_answer
+            )
+            question = "You are answering a multiple-choice question.\n\n"
+            question += f"Question:\n{item['Pre-Revision Question']}\n\nChoices:\n"
+            question += "".join(
+                f"{letters[index]}. {text}\n"
+                for index, (text, _) in enumerate(choices)
+            )
+            question += "\nRespond with only the letter (A, B, C, or D)."
+            rows.append({"question": question, "answer": answer})
+            if limit is not None and len(rows) >= limit:
+                break
+    return rows
+
+
 def load_dataset(name: str, limit: int | None) -> list[dict[str, str]]:
     if name == "gsm8k":
         return load_gsm8k(limit)
     if name == "bbh":
         return load_bbh(limit)
+    if name == "gpqa":
+        return load_gpqa(limit)
     raise ValueError(f"Unsupported dataset: {name}")
 
 
@@ -121,7 +157,7 @@ def normalize_gsm8k_answer(answer: str) -> str:
 
 
 def is_correct(dataset: str, prediction: str, answer: str) -> bool:
-    if dataset == "bbh":
+    if dataset in {"bbh", "gpqa"}:
         return prediction.strip().upper() == answer.strip().upper()
     try:
         return Decimal(prediction) == Decimal(normalize_gsm8k_answer(answer))
@@ -441,7 +477,7 @@ def evaluate(args: argparse.Namespace) -> None:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--dataset", choices=["gsm8k", "bbh"], required=True)
+    parser.add_argument("--dataset", choices=["gsm8k", "bbh", "gpqa"], required=True)
     parser.add_argument("--condition", choices=["baseline", "anti-steer"], required=True)
     parser.add_argument("--model", default="Qwen/Qwen3-4B")
     parser.add_argument("--sae-path", type=Path)
