@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # GPQA Diamond (all 198 examples).
-# Reproduced result: CoT 17.7%, anti-steer 21.7%, 511 -> 476 mean tokens.
+# Matched tokenwise result: CoT 18.2%, anti-steer 21.7%, 511 -> 476 mean tokens.
 REPO_ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 cd "$REPO_ROOT"
 
@@ -71,5 +71,5 @@ run_condition() {
     "$OUTPUT_DIR/${prefix}_shard"{0..3}.json
 }
 
-run_condition baseline generate baseline 1.0
+run_condition baseline tokenwise baseline 1.0
 run_condition anti-steer tokenwise anti_steer_a8.7 "$STRENGTH"
