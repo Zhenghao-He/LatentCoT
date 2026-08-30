@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Verified target: baseline 61.0%, anti-steer 12.1%, max 512 new tokens.
+# Matched tokenwise target: baseline 62.0%, anti-steer 12.1%, max 512 new tokens.
 REPO_ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 cd "$REPO_ROOT"
 
@@ -69,6 +69,5 @@ run_condition() {
     "$OUTPUT_DIR/${prefix}_shard"{0..7}.json
 }
 
-# The intact GSM8K number was measured with the standard transformers engine.
-run_condition baseline generate baseline 1.0
+run_condition baseline tokenwise baseline 1.0
 run_condition anti-steer tokenwise anti_steer_a8.9 "$STRENGTH"
